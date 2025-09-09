@@ -54,76 +54,128 @@ export default function VoiceChat() {
 
     setStatus('Connecting...')
 
-    // Try to become host by claiming the roomId as our Peer ID
-    const tryHost = new Peer(roomId.trim(), { debug: 2 })
-    peerRef.current = tryHost
-
-    const setupHostHandlers = () => {
-      if (!peerRef.current) return
-      setIsHost(true)
-      setIsInCall(true)
-      setStatus('Room created. Waiting for other user to join...')
-
-      peerRef.current.on('call', (call: MediaConnection) => {
-        currentCallRef.current = call
-        call.answer(localStream!)
-        call.on('stream', (remote: MediaStream) => {
-          setRemoteStream(remote)
-          setStatus('Connected!')
-        })
-        call.on('close', () => {
-          setStatus('Peer disconnected')
-          setRemoteStream(null)
-        })
-        call.on('error', () => setStatus('Call error'))
+    // Generate a unique peer ID
+    const peerId = `peer_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    
+    try {
+      // Check if room exists and join
+      const response = await fetch('/api/signaling', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'join', roomId: roomId.trim(), peerId })
       })
-    }
+      
+      const roomData = await response.json()
+      
+      if (roomData.isHost) {
+        // We are the host
+        setIsHost(true)
+        setIsInCall(true)
+        setStatus('Room created. Waiting for other user to join...')
+        
+        // Create peer as host
+        const hostPeer = new Peer(peerId, { 
+          debug: 2,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' }
+            ]
+          }
+        })
+        peerRef.current = hostPeer
 
-    const connectAsGuest = () => {
-      const guestPeer = new Peer({ debug: 2 })
-      peerRef.current = guestPeer
+        hostPeer.on('open', () => {
+          setStatus('Room created. Waiting for other user to join...')
+        })
 
-      guestPeer.on('open', () => {
+        hostPeer.on('call', (call: MediaConnection) => {
+          currentCallRef.current = call
+          call.answer(localStream!)
+          call.on('stream', (remote: MediaStream) => {
+            setRemoteStream(remote)
+            setStatus('Connected!')
+          })
+          call.on('close', () => {
+            setStatus('Peer disconnected')
+            setRemoteStream(null)
+          })
+          call.on('error', () => setStatus('Call error'))
+        })
+
+        hostPeer.on('error', (err: any) => {
+          console.error('Host peer error:', err)
+          setStatus('Connection error')
+        })
+
+      } else {
+        // We are a guest
         setIsHost(false)
         setIsInCall(true)
         setStatus('Joining room...')
-        const call = guestPeer.call(roomId.trim(), localStream!)
-        if (!call) {
-          setStatus('Unable to call host. Is the host online?')
-          return
-        }
-        currentCallRef.current = call
-        call.on('stream', (remote: MediaStream) => {
-          setRemoteStream(remote)
-          setStatus('Connected!')
+        
+        // Create peer as guest
+        const guestPeer = new Peer(peerId, { 
+          debug: 2,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' }
+            ]
+          }
         })
-        call.on('close', () => {
-          setStatus('Peer disconnected')
-          setRemoteStream(null)
+        peerRef.current = guestPeer
+
+        guestPeer.on('open', () => {
+          setStatus('Calling host...')
+          const call = guestPeer.call(roomData.hostId, localStream!)
+          if (!call) {
+            setStatus('Unable to call host. Is the host online?')
+            return
+          }
+          currentCallRef.current = call
+          call.on('stream', (remote: MediaStream) => {
+            setRemoteStream(remote)
+            setStatus('Connected!')
+          })
+          call.on('close', () => {
+            setStatus('Peer disconnected')
+            setRemoteStream(null)
+          })
+          call.on('error', () => setStatus('Call error'))
         })
-        call.on('error', () => setStatus('Call error'))
-      })
 
-      guestPeer.on('error', () => setStatus('Peer connection error'))
-    }
-
-    tryHost.on('open', setupHostHandlers)
-
-    // If ID is taken, we are not the host → join as guest
-    tryHost.on('error', (err: any) => {
-      if (err?.type === 'unavailable-id' || /unavailable/i.test(String(err))) {
-        tryHost.destroy()
-        connectAsGuest()
-      } else {
-        setStatus('Peer error')
+        guestPeer.on('error', (err: any) => {
+          console.error('Guest peer error:', err)
+          setStatus('Connection error')
+        })
       }
-    })
+    } catch (error) {
+      console.error('Signaling error:', error)
+      setStatus('Failed to join room')
+    }
   }
 
-  const leaveRoom = () => {
+  const leaveRoom = async () => {
     setIsInCall(false)
     setIsHost(false)
     setStatus('Left the room')
+    
+    // Notify signaling server
+    if (roomId) {
+      try {
+        await fetch('/api/signaling', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'leave', roomId: roomId.trim(), peerId: peerRef.current?.id })
+        })
+      } catch (error) {
+        console.error('Error leaving room:', error)
+      }
+    }
+    
     if (currentCallRef.current) {
       try { currentCallRef.current.close() } catch {}
       currentCallRef.current = null
@@ -147,11 +199,25 @@ export default function VoiceChat() {
     }
   }
 
-  const stopVoiceChat = () => {
+  const stopVoiceChat = async () => {
     if (localStream) {
       localStream.getTracks().forEach((track: MediaStreamTrack) => track.stop())
       setLocalStream(null)
     }
+    
+    // Notify signaling server
+    if (roomId && peerRef.current) {
+      try {
+        await fetch('/api/signaling', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'leave', roomId: roomId.trim(), peerId: peerRef.current.id })
+        })
+      } catch (error) {
+        console.error('Error leaving room:', error)
+      }
+    }
+    
     if (currentCallRef.current) {
       try { currentCallRef.current.close() } catch {}
       currentCallRef.current = null

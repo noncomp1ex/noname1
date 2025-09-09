@@ -77,18 +77,22 @@ export default function VoiceChat() {
         setIsInCall(true)
         setStatus('Room created. Waiting for other user to join...')
         
-        // Create peer as host
+        // Create peer as host with aggressive NAT traversal config
         const hostPeer = new Peer(peerId, { 
           debug: 2,
           config: {
             iceServers: [
-              // Optimized STUN servers (max 3)
+              // More STUN servers for restrictive NATs
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
               { urls: 'stun:stun2.l.google.com:19302' },
+              { urls: 'stun:stun3.l.google.com:19302' },
+              { urls: 'stun:stun4.l.google.com:19302' },
               // Dynamic TURN servers
               ...turnData.turnServers
-            ]
+            ],
+            iceCandidatePoolSize: 10,
+            iceTransportPolicy: 'all'
           }
         })
         peerRef.current = hostPeer
@@ -198,18 +202,22 @@ export default function VoiceChat() {
         setIsInCall(true)
         setStatus('Joining room...')
         
-        // Create peer as guest
+        // Create peer as guest with aggressive NAT traversal config
         const guestPeer = new Peer(peerId, { 
           debug: 2,
           config: {
             iceServers: [
-              // Optimized STUN servers (max 3)
+              // More STUN servers for restrictive NATs
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
               { urls: 'stun:stun2.l.google.com:19302' },
+              { urls: 'stun:stun3.l.google.com:19302' },
+              { urls: 'stun:stun4.l.google.com:19302' },
               // Dynamic TURN servers
               ...turnData.turnServers
-            ]
+            ],
+            iceCandidatePoolSize: 10,
+            iceTransportPolicy: 'all'
           }
         })
         peerRef.current = guestPeer
@@ -333,7 +341,7 @@ export default function VoiceChat() {
       console.error('Signaling error:', error)
       setStatus('Failed to join room - trying fallback...')
       
-      // Fallback: try with minimal STUN servers only
+      // Fallback: try with more STUN servers for restrictive NATs
       try {
         const fallbackPeer = new Peer(peerId, { 
           debug: 2,
@@ -341,8 +349,12 @@ export default function VoiceChat() {
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:stun2.l.google.com:19302' }
-            ]
+              { urls: 'stun:stun2.l.google.com:19302' },
+              { urls: 'stun:stun3.l.google.com:19302' },
+              { urls: 'stun:stun4.l.google.com:19302' }
+            ],
+            iceCandidatePoolSize: 10,
+            iceTransportPolicy: 'all'
           }
         })
         peerRef.current = fallbackPeer
@@ -564,6 +576,33 @@ export default function VoiceChat() {
           }}>
             Force Reconnect
           </button>
+          
+          <button onClick={async () => {
+            setStatus('Trying restrictive NAT bypass...')
+            // Try with only TURN servers (no STUN)
+            try {
+              const turnResponse = await fetch('/api/turn')
+              const turnData = await turnResponse.json()
+              
+              if (currentCallRef.current) {
+                const pc = currentCallRef.current.peerConnection
+                const config = pc.getConfiguration()
+                config.iceServers = [
+                  // Only TURN servers for restrictive NATs
+                  ...turnData.turnServers
+                ]
+                config.iceTransportPolicy = 'relay'
+                pc.setConfiguration(config)
+                pc.restartIce()
+                setStatus('Trying TURN-only connection...')
+              }
+            } catch (error) {
+              console.error('TURN-only connection failed:', error)
+              setStatus('TURN-only connection failed')
+            }
+          }}>
+            Try TURN-Only
+          </button>
         </div>
       )}
 
@@ -584,10 +623,13 @@ export default function VoiceChat() {
         <p>• Use "Debug Connection" button to see connection state</p>
         <p>• Use "Restart Connection" if connection gets stuck</p>
         <p>• Use "Try Alternative TURN" for cross-city connections</p>
+        <p>• Use "Try TURN-Only" for restrictive ISP networks</p>
         <p>• If TURN servers fail, the app will try STUN-only fallback</p>
         <p>• For cross-city connections, TURN servers are essential</p>
+        <p>• For restrictive ISPs (like Vivacom), try TURN-only mode</p>
         <p>• Try opening two tabs on the same device first to test locally</p>
         <p>• If ICE connection state shows "failed", try alternative TURN servers</p>
+        <p>• Mobile networks often work better than home WiFi for P2P connections</p>
       </div>
 
       {/* Hidden audio elements for playback */}

@@ -58,6 +58,10 @@ export default function VoiceChat() {
     const peerId = `peer_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
     
     try {
+      // Fetch TURN servers
+      const turnResponse = await fetch('/api/turn')
+      const turnData = await turnResponse.json()
+      
       // Check if room exists and join
       const response = await fetch('/api/signaling', {
         method: 'POST',
@@ -78,38 +82,25 @@ export default function VoiceChat() {
           debug: 2,
           config: {
             iceServers: [
+              // Google STUN servers
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
               { urls: 'stun:stun2.l.google.com:19302' },
               { urls: 'stun:stun3.l.google.com:19302' },
               { urls: 'stun:stun4.l.google.com:19302' },
-              // Free TURN servers (use with caution in production)
-              { 
-                urls: 'turn:openrelay.metered.ca:80',
-                username: 'openrelayproject',
-                credential: 'openrelayproject'
-              },
-              { 
-                urls: 'turn:openrelay.metered.ca:443',
-                username: 'openrelayproject',
-                credential: 'openrelayproject'
-              },
-              { 
-                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-                username: 'openrelayproject',
-                credential: 'openrelayproject'
-              },
-              // Additional free TURN servers
-              { 
-                urls: 'turn:freeturn.tel:3478',
-                username: 'freeturn',
-                credential: 'freeturn'
-              },
-              { 
-                urls: 'turn:freeturn.tel:3478?transport=tcp',
-                username: 'freeturn',
-                credential: 'freeturn'
-              }
+              // Additional STUN servers
+              { urls: 'stun:stun.ekiga.net' },
+              { urls: 'stun:stun.ideasip.com' },
+              { urls: 'stun:stun.schlund.de' },
+              { urls: 'stun:stun.stunprotocol.org:3478' },
+              { urls: 'stun:stun.voiparound.com' },
+              { urls: 'stun:stun.voipbuster.com' },
+              { urls: 'stun:stun.voipstunt.com' },
+              { urls: 'stun:stun.counterpath.com' },
+              { urls: 'stun:stun.1und1.de' },
+              { urls: 'stun:stun.gmx.net' },
+              // Dynamic TURN servers
+              ...turnData.turnServers
             ]
           }
         })
@@ -139,9 +130,23 @@ export default function VoiceChat() {
           call.peerConnection.oniceconnectionstatechange = () => {
             console.log('ICE connection state:', call.peerConnection.iceConnectionState)
             if (call.peerConnection.iceConnectionState === 'failed') {
-              setStatus('Connection failed - trying TURN servers...')
+              setStatus('Connection failed - trying alternative servers...')
+              // Try to restart ICE gathering
+              call.peerConnection.restartIce()
             } else if (call.peerConnection.iceConnectionState === 'connected') {
               setStatus('Connected!')
+            } else if (call.peerConnection.iceConnectionState === 'checking') {
+              setStatus('Checking connection...')
+            } else if (call.peerConnection.iceConnectionState === 'completed') {
+              setStatus('Connected!')
+            }
+          }
+          
+          // Monitor ICE gathering state
+          call.peerConnection.onicegatheringstatechange = () => {
+            console.log('ICE gathering state:', call.peerConnection.iceGatheringState)
+            if (call.peerConnection.iceGatheringState === 'gathering') {
+              setStatus('Gathering connection candidates...')
             }
           }
         })
@@ -162,38 +167,25 @@ export default function VoiceChat() {
           debug: 2,
           config: {
             iceServers: [
+              // Google STUN servers
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
               { urls: 'stun:stun2.l.google.com:19302' },
               { urls: 'stun:stun3.l.google.com:19302' },
               { urls: 'stun:stun4.l.google.com:19302' },
-              // Free TURN servers (use with caution in production)
-              { 
-                urls: 'turn:openrelay.metered.ca:80',
-                username: 'openrelayproject',
-                credential: 'openrelayproject'
-              },
-              { 
-                urls: 'turn:openrelay.metered.ca:443',
-                username: 'openrelayproject',
-                credential: 'openrelayproject'
-              },
-              { 
-                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-                username: 'openrelayproject',
-                credential: 'openrelayproject'
-              },
-              // Additional free TURN servers
-              { 
-                urls: 'turn:freeturn.tel:3478',
-                username: 'freeturn',
-                credential: 'freeturn'
-              },
-              { 
-                urls: 'turn:freeturn.tel:3478?transport=tcp',
-                username: 'freeturn',
-                credential: 'freeturn'
-              }
+              // Additional STUN servers
+              { urls: 'stun:stun.ekiga.net' },
+              { urls: 'stun:stun.ideasip.com' },
+              { urls: 'stun:stun.schlund.de' },
+              { urls: 'stun:stun.stunprotocol.org:3478' },
+              { urls: 'stun:stun.voiparound.com' },
+              { urls: 'stun:stun.voipbuster.com' },
+              { urls: 'stun:stun.voipstunt.com' },
+              { urls: 'stun:stun.counterpath.com' },
+              { urls: 'stun:stun.1und1.de' },
+              { urls: 'stun:stun.gmx.net' },
+              // Dynamic TURN servers
+              ...turnData.turnServers
             ]
           }
         })
@@ -224,9 +216,23 @@ export default function VoiceChat() {
           call.peerConnection.oniceconnectionstatechange = () => {
             console.log('ICE connection state:', call.peerConnection.iceConnectionState)
             if (call.peerConnection.iceConnectionState === 'failed') {
-              setStatus('Connection failed - trying TURN servers...')
+              setStatus('Connection failed - trying alternative servers...')
+              // Try to restart ICE gathering
+              call.peerConnection.restartIce()
             } else if (call.peerConnection.iceConnectionState === 'connected') {
               setStatus('Connected!')
+            } else if (call.peerConnection.iceConnectionState === 'checking') {
+              setStatus('Checking connection...')
+            } else if (call.peerConnection.iceConnectionState === 'completed') {
+              setStatus('Connected!')
+            }
+          }
+          
+          // Monitor ICE gathering state
+          call.peerConnection.onicegatheringstatechange = () => {
+            console.log('ICE gathering state:', call.peerConnection.iceGatheringState)
+            if (call.peerConnection.iceGatheringState === 'gathering') {
+              setStatus('Gathering connection candidates...')
             }
           }
         })
@@ -238,7 +244,40 @@ export default function VoiceChat() {
       }
     } catch (error) {
       console.error('Signaling error:', error)
-      setStatus('Failed to join room')
+      setStatus('Failed to join room - trying fallback...')
+      
+      // Fallback: try with minimal STUN servers only
+      try {
+        const fallbackPeer = new Peer(peerId, { 
+          debug: 2,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+          }
+        })
+        peerRef.current = fallbackPeer
+        
+        fallbackPeer.on('open', () => {
+          setStatus('Fallback connection established')
+        })
+        
+        fallbackPeer.on('call', (call: MediaConnection) => {
+          currentCallRef.current = call
+          call.answer(localStream!)
+          call.on('stream', (remote: MediaStream) => {
+            setRemoteStream(remote)
+            setStatus('Connected via fallback!')
+          })
+        })
+        
+        setIsInCall(true)
+        setIsHost(true)
+      } catch (fallbackError) {
+        console.error('Fallback failed:', fallbackError)
+        setStatus('Connection failed completely')
+      }
     }
   }
 
@@ -358,6 +397,20 @@ export default function VoiceChat() {
           <button onClick={stopVoiceChat}>
             Stop Voice Chat
           </button>
+          
+          <button onClick={() => {
+            console.log('Current connection state:', {
+              isInCall,
+              isHost,
+              hasLocalStream: !!localStream,
+              hasRemoteStream: !!remoteStream,
+              peerId: peerRef.current?.id,
+              callId: currentCallRef.current?.peer
+            })
+            setStatus('Debug info logged to console')
+          }}>
+            Debug Connection
+          </button>
         </div>
       )}
 
@@ -375,6 +428,9 @@ export default function VoiceChat() {
         <p>• Check browser console for detailed error messages</p>
         <p>• Ensure both users have microphone access enabled</p>
         <p>• Try refreshing the page if connection gets stuck</p>
+        <p>• Use "Debug Connection" button to see connection state</p>
+        <p>• If TURN servers fail, the app will try STUN-only fallback</p>
+        <p>• For best results, both users should be on the same network type</p>
       </div>
 
       {/* Hidden audio elements for playback */}

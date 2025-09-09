@@ -82,23 +82,10 @@ export default function VoiceChat() {
           debug: 2,
           config: {
             iceServers: [
-              // Google STUN servers
+              // Optimized STUN servers (max 3)
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
               { urls: 'stun:stun2.l.google.com:19302' },
-              { urls: 'stun:stun3.l.google.com:19302' },
-              { urls: 'stun:stun4.l.google.com:19302' },
-              // Additional STUN servers
-              { urls: 'stun:stun.ekiga.net' },
-              { urls: 'stun:stun.ideasip.com' },
-              { urls: 'stun:stun.schlund.de' },
-              { urls: 'stun:stun.stunprotocol.org:3478' },
-              { urls: 'stun:stun.voiparound.com' },
-              { urls: 'stun:stun.voipbuster.com' },
-              { urls: 'stun:stun.voipstunt.com' },
-              { urls: 'stun:stun.counterpath.com' },
-              { urls: 'stun:stun.1und1.de' },
-              { urls: 'stun:stun.gmx.net' },
               // Dynamic TURN servers
               ...turnData.turnServers
             ]
@@ -167,23 +154,10 @@ export default function VoiceChat() {
           debug: 2,
           config: {
             iceServers: [
-              // Google STUN servers
+              // Optimized STUN servers (max 3)
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
               { urls: 'stun:stun2.l.google.com:19302' },
-              { urls: 'stun:stun3.l.google.com:19302' },
-              { urls: 'stun:stun4.l.google.com:19302' },
-              // Additional STUN servers
-              { urls: 'stun:stun.ekiga.net' },
-              { urls: 'stun:stun.ideasip.com' },
-              { urls: 'stun:stun.schlund.de' },
-              { urls: 'stun:stun.stunprotocol.org:3478' },
-              { urls: 'stun:stun.voiparound.com' },
-              { urls: 'stun:stun.voipbuster.com' },
-              { urls: 'stun:stun.voipstunt.com' },
-              { urls: 'stun:stun.counterpath.com' },
-              { urls: 'stun:stun.1und1.de' },
-              { urls: 'stun:stun.gmx.net' },
               // Dynamic TURN servers
               ...turnData.turnServers
             ]
@@ -193,21 +167,35 @@ export default function VoiceChat() {
 
         guestPeer.on('open', () => {
           setStatus('Calling host...')
+          
+          // Add timeout for connection
+          const connectionTimeout = setTimeout(() => {
+            if (!currentCallRef.current) {
+              setStatus('Connection timeout - host may be offline')
+              guestPeer.destroy()
+            }
+          }, 10000) // 10 second timeout
+          
           const call = guestPeer.call(roomData.hostId, localStream!)
           if (!call) {
             setStatus('Unable to call host. Is the host online?')
+            clearTimeout(connectionTimeout)
             return
           }
           currentCallRef.current = call
+          
           call.on('stream', (remote: MediaStream) => {
+            clearTimeout(connectionTimeout)
             setRemoteStream(remote)
             setStatus('Connected!')
           })
           call.on('close', () => {
+            clearTimeout(connectionTimeout)
             setStatus('Peer disconnected')
             setRemoteStream(null)
           })
           call.on('error', (err: any) => {
+            clearTimeout(connectionTimeout)
             console.error('Call error:', err)
             setStatus('Call error: ' + err.message)
           })
@@ -220,10 +208,12 @@ export default function VoiceChat() {
               // Try to restart ICE gathering
               call.peerConnection.restartIce()
             } else if (call.peerConnection.iceConnectionState === 'connected') {
+              clearTimeout(connectionTimeout)
               setStatus('Connected!')
             } else if (call.peerConnection.iceConnectionState === 'checking') {
               setStatus('Checking connection...')
             } else if (call.peerConnection.iceConnectionState === 'completed') {
+              clearTimeout(connectionTimeout)
               setStatus('Connected!')
             }
           }
@@ -239,7 +229,22 @@ export default function VoiceChat() {
 
         guestPeer.on('error', (err: any) => {
           console.error('Guest peer error:', err)
-          setStatus('Connection error')
+          setStatus('Connection error - retrying...')
+          
+          // Retry connection after a short delay
+          setTimeout(() => {
+            if (peerRef.current && !currentCallRef.current) {
+              setStatus('Retrying connection...')
+              const retryCall = guestPeer.call(roomData.hostId, localStream!)
+              if (retryCall) {
+                currentCallRef.current = retryCall
+                retryCall.on('stream', (remote: MediaStream) => {
+                  setRemoteStream(remote)
+                  setStatus('Connected on retry!')
+                })
+              }
+            }
+          }, 2000)
         })
       }
     } catch (error) {
@@ -405,11 +410,23 @@ export default function VoiceChat() {
               hasLocalStream: !!localStream,
               hasRemoteStream: !!remoteStream,
               peerId: peerRef.current?.id,
-              callId: currentCallRef.current?.peer
+              callId: currentCallRef.current?.peer,
+              iceConnectionState: currentCallRef.current?.peerConnection?.iceConnectionState,
+              iceGatheringState: currentCallRef.current?.peerConnection?.iceGatheringState
             })
             setStatus('Debug info logged to console')
           }}>
             Debug Connection
+          </button>
+          
+          <button onClick={() => {
+            if (currentCallRef.current) {
+              console.log('Restarting ICE gathering...')
+              currentCallRef.current.peerConnection.restartIce()
+              setStatus('Restarting connection...')
+            }
+          }}>
+            Restart Connection
           </button>
         </div>
       )}

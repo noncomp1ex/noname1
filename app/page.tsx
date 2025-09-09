@@ -140,7 +140,56 @@ export default function VoiceChat() {
 
         hostPeer.on('error', (err: any) => {
           console.error('Host peer error:', err)
-          setStatus('Connection error')
+          setStatus('Host connection error: ' + err.message)
+          
+          // Try to recover by destroying and recreating the peer
+          if (peerRef.current) {
+            peerRef.current.destroy()
+          }
+          
+          setTimeout(() => {
+            if (!currentCallRef.current) {
+              setStatus('Retrying host connection...')
+              // Recreate host peer
+              const retryHostPeer = new Peer(peerId, { 
+                debug: 2,
+                config: { 
+                  iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' }
+                  ]
+                }
+              })
+              peerRef.current = retryHostPeer
+              
+              retryHostPeer.on('open', () => {
+                setStatus('Host reconnected - waiting for calls...')
+              })
+              
+              retryHostPeer.on('call', (call: MediaConnection) => {
+                currentCallRef.current = call
+                call.answer(localStream!)
+                call.on('stream', (remote: MediaStream) => {
+                  setRemoteStream(remote)
+                  setStatus('Connected!')
+                })
+                call.on('close', () => {
+                  setStatus('Call ended')
+                  setRemoteStream(null)
+                })
+                call.on('error', (callErr: any) => {
+                  console.error('Retry call error:', callErr)
+                  setStatus('Call error: ' + callErr.message)
+                })
+              })
+              
+              retryHostPeer.on('error', (retryErr: any) => {
+                console.error('Retry host peer error:', retryErr)
+                setStatus('Host retry failed - please refresh and try again')
+              })
+            }
+          }, 2000)
         })
 
       } else {
@@ -204,9 +253,13 @@ export default function VoiceChat() {
           call.peerConnection.oniceconnectionstatechange = () => {
             console.log('ICE connection state:', call.peerConnection.iceConnectionState)
             if (call.peerConnection.iceConnectionState === 'failed') {
-              setStatus('Connection failed - trying alternative servers...')
-              // Try to restart ICE gathering
-              call.peerConnection.restartIce()
+              setStatus('Connection failed - trying alternative approach...')
+              // Try to restart ICE gathering with different configuration
+              setTimeout(() => {
+                if (call.peerConnection.iceConnectionState === 'failed') {
+                  call.peerConnection.restartIce()
+                }
+              }, 1000)
             } else if (call.peerConnection.iceConnectionState === 'connected') {
               clearTimeout(connectionTimeout)
               setStatus('Connected!')
@@ -231,20 +284,49 @@ export default function VoiceChat() {
           console.error('Guest peer error:', err)
           setStatus('Connection error - retrying...')
           
-          // Retry connection after a short delay
+          // Destroy the current peer and create a new one
+          if (peerRef.current) {
+            peerRef.current.destroy()
+          }
+          
+          // Retry connection after a short delay with a new peer
           setTimeout(() => {
-            if (peerRef.current && !currentCallRef.current) {
-              setStatus('Retrying connection...')
-              const retryCall = guestPeer.call(roomData.hostId, localStream!)
-              if (retryCall) {
-                currentCallRef.current = retryCall
-                retryCall.on('stream', (remote: MediaStream) => {
-                  setRemoteStream(remote)
-                  setStatus('Connected on retry!')
-                })
-              }
+            if (!currentCallRef.current) {
+              setStatus('Retrying with new connection...')
+              // Create a new guest peer
+              const retryPeer = new Peer({ 
+                debug: 2,
+                config: { 
+                  iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' }
+                  ]
+                }
+              })
+              peerRef.current = retryPeer
+              
+              retryPeer.on('open', () => {
+                const retryCall = retryPeer.call(roomData.hostId, localStream!)
+                if (retryCall) {
+                  currentCallRef.current = retryCall
+                  retryCall.on('stream', (remote: MediaStream) => {
+                    setRemoteStream(remote)
+                    setStatus('Connected on retry!')
+                  })
+                  retryCall.on('error', (retryErr: any) => {
+                    console.error('Retry call error:', retryErr)
+                    setStatus('Retry failed - please refresh and try again')
+                  })
+                }
+              })
+              
+              retryPeer.on('error', (retryErr: any) => {
+                console.error('Retry peer error:', retryErr)
+                setStatus('Retry failed - please refresh and try again')
+              })
             }
-          }, 2000)
+          }, 3000)
         })
       }
     } catch (error) {
@@ -258,7 +340,8 @@ export default function VoiceChat() {
           config: {
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' }
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' }
             ]
           }
         })
@@ -275,13 +358,22 @@ export default function VoiceChat() {
             setRemoteStream(remote)
             setStatus('Connected via fallback!')
           })
+          
+          // Add connection monitoring for fallback
+          call.peerConnection.oniceconnectionstatechange = () => {
+            console.log('Fallback ICE state:', call.peerConnection.iceConnectionState)
+            if (call.peerConnection.iceConnectionState === 'connected' || 
+                call.peerConnection.iceConnectionState === 'completed') {
+              setStatus('Connected via fallback!')
+            }
+          }
         })
         
         setIsInCall(true)
         setIsHost(true)
       } catch (fallbackError) {
         console.error('Fallback failed:', fallbackError)
-        setStatus('Connection failed completely')
+        setStatus('Connection failed completely - try refreshing the page')
       }
     }
   }
@@ -428,6 +520,50 @@ export default function VoiceChat() {
           }}>
             Restart Connection
           </button>
+          
+          <button onClick={async () => {
+            setStatus('Trying alternative connection method...')
+            // Try with different TURN servers
+            try {
+              const altTurnResponse = await fetch('/api/turn')
+              const altTurnData = await altTurnResponse.json()
+              
+              if (currentCallRef.current) {
+                const pc = currentCallRef.current.peerConnection
+                const config = pc.getConfiguration()
+                config.iceServers = [
+                  { urls: 'stun:stun.l.google.com:19302' },
+                  { urls: 'stun:stun1.l.google.com:19302' },
+                  ...altTurnData.turnServers
+                ]
+                pc.setConfiguration(config)
+                pc.restartIce()
+                setStatus('Trying alternative TURN servers...')
+              }
+            } catch (error) {
+              console.error('Alternative connection failed:', error)
+              setStatus('Alternative connection failed')
+            }
+          }}>
+            Try Alternative TURN
+          </button>
+          
+          <button onClick={() => {
+            setStatus('Force reconnecting...')
+            // Destroy current connection and restart
+            if (peerRef.current) {
+              peerRef.current.destroy()
+            }
+            if (currentCallRef.current) {
+              currentCallRef.current.close()
+            }
+            setRemoteStream(null)
+            setIsInCall(false)
+            setIsHost(false)
+            setStatus('Disconnected - please join room again')
+          }}>
+            Force Reconnect
+          </button>
         </div>
       )}
 
@@ -446,8 +582,12 @@ export default function VoiceChat() {
         <p>• Ensure both users have microphone access enabled</p>
         <p>• Try refreshing the page if connection gets stuck</p>
         <p>• Use "Debug Connection" button to see connection state</p>
+        <p>• Use "Restart Connection" if connection gets stuck</p>
+        <p>• Use "Try Alternative TURN" for cross-city connections</p>
         <p>• If TURN servers fail, the app will try STUN-only fallback</p>
-        <p>• For best results, both users should be on the same network type</p>
+        <p>• For cross-city connections, TURN servers are essential</p>
+        <p>• Try opening two tabs on the same device first to test locally</p>
+        <p>• If ICE connection state shows "failed", try alternative TURN servers</p>
       </div>
 
       {/* Hidden audio elements for playback */}

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import Peer, { MediaConnection } from 'peerjs'
 
 interface VoiceChatProps {}
 
@@ -12,42 +13,11 @@ export default function VoiceChat() {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null)
   const [isHost, setIsHost] = useState(false)
-  
+
   const localAudioRef = useRef<HTMLAudioElement>(null)
   const remoteAudioRef = useRef<HTMLAudioElement>(null)
-  const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
-  const dataChannelRef = useRef<RTCDataChannel | null>(null)
-
-  const iceServers = {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' }
-    ]
-  }
-
-  // Simple signaling using localStorage and storage events
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === `voice-chat-${roomId}` && e.newValue) {
-        const data = JSON.parse(e.newValue)
-        handleSignalingData(data)
-      }
-    }
-
-    window.addEventListener('storage', handleStorageChange)
-    return () => window.removeEventListener('storage', handleStorageChange)
-  }, [roomId])
-
-  const sendSignalingData = (data: any) => {
-    if (roomId) {
-      localStorage.setItem(`voice-chat-${roomId}`, JSON.stringify({
-        ...data,
-        timestamp: Date.now(),
-        sender: 'peer'
-      }))
-    }
-  }
+  const peerRef = useRef<Peer | null>(null)
+  const currentCallRef = useRef<MediaConnection | null>(null)
 
   useEffect(() => {
     if (localAudioRef.current && localStream) {
@@ -60,28 +30,6 @@ export default function VoiceChat() {
       remoteAudioRef.current.srcObject = remoteStream
     }
   }, [remoteStream])
-
-  const handleSignalingData = async (data: any) => {
-    if (data.sender === 'peer') return // Ignore our own messages
-
-    switch (data.type) {
-      case 'offer':
-        await handleOffer(data.offer)
-        break
-      case 'answer':
-        await handleAnswer(data.answer)
-        break
-      case 'ice-candidate':
-        await handleIceCandidate(data.candidate)
-        break
-      case 'user-joined':
-        if (isHost) {
-          setStatus('Another user joined, creating offer...')
-          await createOffer()
-        }
-        break
-    }
-  }
 
   const startVoiceChat = async () => {
     try {
@@ -104,101 +52,90 @@ export default function VoiceChat() {
   const joinRoom = async () => {
     if (!roomId.trim() || !localStream) return
 
-    const roomKey = `voice-chat-${roomId.trim()}`
-    const existingData = localStorage.getItem(roomKey)
-    
-    if (existingData) {
-      // Room exists, join as participant
-      setIsHost(false)
-      setStatus('Joining existing room...')
-      sendSignalingData({ type: 'user-joined' })
-    } else {
-      // Create new room as host
+    setStatus('Connecting...')
+
+    // Try to become host by claiming the roomId as our Peer ID
+    const tryHost = new Peer(roomId.trim(), { debug: 2 })
+    peerRef.current = tryHost
+
+    const setupHostHandlers = () => {
+      if (!peerRef.current) return
       setIsHost(true)
-      setStatus('Created new room - waiting for others to join...')
-    }
-    
-    setIsInCall(true)
-  }
+      setIsInCall(true)
+      setStatus('Room created. Waiting for other user to join...')
 
-  const leaveRoom = () => {
-    if (roomId) {
-      localStorage.removeItem(`voice-chat-${roomId}`)
-    }
-    setIsInCall(false)
-    setIsHost(false)
-    setStatus('Left the room')
-    closePeerConnection()
-  }
-
-  const createPeerConnection = () => {
-    const peerConnection = new RTCPeerConnection(iceServers)
-    
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        sendSignalingData({
-          type: 'ice-candidate',
-          candidate: event.candidate
+      peerRef.current.on('call', (call: MediaConnection) => {
+        currentCallRef.current = call
+        call.answer(localStream!)
+        call.on('stream', (remote: MediaStream) => {
+          setRemoteStream(remote)
+          setStatus('Connected!')
         })
-      }
-    }
-
-    peerConnection.ontrack = (event) => {
-      setRemoteStream(event.streams[0])
-      setStatus('Connected to other user!')
-    }
-
-    if (localStream) {
-      localStream.getTracks().forEach((track: MediaStreamTrack) => {
-        peerConnection.addTrack(track, localStream)
+        call.on('close', () => {
+          setStatus('Peer disconnected')
+          setRemoteStream(null)
+        })
+        call.on('error', () => setStatus('Call error'))
       })
     }
 
-    peerConnectionRef.current = peerConnection
-  }
+    const connectAsGuest = () => {
+      const guestPeer = new Peer({ debug: 2 })
+      peerRef.current = guestPeer
 
-  const createOffer = async () => {
-    createPeerConnection()
-    const offer = await peerConnectionRef.current!.createOffer()
-    await peerConnectionRef.current!.setLocalDescription(offer)
-    sendSignalingData({
-      type: 'offer',
-      offer: offer
-    })
-    setStatus('Sent offer to other user')
-  }
+      guestPeer.on('open', () => {
+        setIsHost(false)
+        setIsInCall(true)
+        setStatus('Joining room...')
+        const call = guestPeer.call(roomId.trim(), localStream!)
+        if (!call) {
+          setStatus('Unable to call host. Is the host online?')
+          return
+        }
+        currentCallRef.current = call
+        call.on('stream', (remote: MediaStream) => {
+          setRemoteStream(remote)
+          setStatus('Connected!')
+        })
+        call.on('close', () => {
+          setStatus('Peer disconnected')
+          setRemoteStream(null)
+        })
+        call.on('error', () => setStatus('Call error'))
+      })
 
-  const handleOffer = async (offer: RTCSessionDescriptionInit) => {
-    createPeerConnection()
-    await peerConnectionRef.current!.setRemoteDescription(offer)
-    const answer = await peerConnectionRef.current!.createAnswer()
-    await peerConnectionRef.current!.setLocalDescription(answer)
-    sendSignalingData({
-      type: 'answer',
-      answer: answer
-    })
-    setStatus('Sent answer to other user')
-  }
-
-  const handleAnswer = async (answer: RTCSessionDescriptionInit) => {
-    if (peerConnectionRef.current) {
-      await peerConnectionRef.current.setRemoteDescription(answer)
+      guestPeer.on('error', () => setStatus('Peer connection error'))
     }
+
+    tryHost.on('open', setupHostHandlers)
+
+    // If ID is taken, we are not the host → join as guest
+    tryHost.on('error', (err: any) => {
+      if (err?.type === 'unavailable-id' || /unavailable/i.test(String(err))) {
+        tryHost.destroy()
+        connectAsGuest()
+      } else {
+        setStatus('Peer error')
+      }
+    })
   }
 
-  const handleIceCandidate = async (candidate: RTCIceCandidateInit) => {
-    if (peerConnectionRef.current) {
-      await peerConnectionRef.current.addIceCandidate(candidate)
+  const leaveRoom = () => {
+    setIsInCall(false)
+    setIsHost(false)
+    setStatus('Left the room')
+    if (currentCallRef.current) {
+      try { currentCallRef.current.close() } catch {}
+      currentCallRef.current = null
     }
-  }
-
-  const closePeerConnection = () => {
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close()
-      peerConnectionRef.current = null
+    if (peerRef.current) {
+      try { peerRef.current.destroy() } catch {}
+      peerRef.current = null
     }
     setRemoteStream(null)
   }
+
+  // PeerJS handles signaling under the hood; no manual SDP/ICE handling needed
 
   const toggleMute = () => {
     if (localStream) {
@@ -215,7 +152,14 @@ export default function VoiceChat() {
       localStream.getTracks().forEach((track: MediaStreamTrack) => track.stop())
       setLocalStream(null)
     }
-    closePeerConnection()
+    if (currentCallRef.current) {
+      try { currentCallRef.current.close() } catch {}
+      currentCallRef.current = null
+    }
+    if (peerRef.current) {
+      try { peerRef.current.destroy() } catch {}
+      peerRef.current = null
+    }
     setIsInCall(false)
     setIsHost(false)
     setStatus('Voice chat stopped')

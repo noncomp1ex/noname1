@@ -80,7 +80,36 @@ export default function VoiceChat() {
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:stun2.l.google.com:19302' }
+              { urls: 'stun:stun2.l.google.com:19302' },
+              { urls: 'stun:stun3.l.google.com:19302' },
+              { urls: 'stun:stun4.l.google.com:19302' },
+              // Free TURN servers (use with caution in production)
+              { 
+                urls: 'turn:openrelay.metered.ca:80',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+              },
+              { 
+                urls: 'turn:openrelay.metered.ca:443',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+              },
+              { 
+                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+              },
+              // Additional free TURN servers
+              { 
+                urls: 'turn:freeturn.tel:3478',
+                username: 'freeturn',
+                credential: 'freeturn'
+              },
+              { 
+                urls: 'turn:freeturn.tel:3478?transport=tcp',
+                username: 'freeturn',
+                credential: 'freeturn'
+              }
             ]
           }
         })
@@ -101,7 +130,20 @@ export default function VoiceChat() {
             setStatus('Peer disconnected')
             setRemoteStream(null)
           })
-          call.on('error', () => setStatus('Call error'))
+          call.on('error', (err: any) => {
+            console.error('Call error:', err)
+            setStatus('Call error: ' + err.message)
+          })
+          
+          // Monitor connection state
+          call.peerConnection.oniceconnectionstatechange = () => {
+            console.log('ICE connection state:', call.peerConnection.iceConnectionState)
+            if (call.peerConnection.iceConnectionState === 'failed') {
+              setStatus('Connection failed - trying TURN servers...')
+            } else if (call.peerConnection.iceConnectionState === 'connected') {
+              setStatus('Connected!')
+            }
+          }
         })
 
         hostPeer.on('error', (err: any) => {
@@ -122,7 +164,36 @@ export default function VoiceChat() {
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:stun2.l.google.com:19302' }
+              { urls: 'stun:stun2.l.google.com:19302' },
+              { urls: 'stun:stun3.l.google.com:19302' },
+              { urls: 'stun:stun4.l.google.com:19302' },
+              // Free TURN servers (use with caution in production)
+              { 
+                urls: 'turn:openrelay.metered.ca:80',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+              },
+              { 
+                urls: 'turn:openrelay.metered.ca:443',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+              },
+              { 
+                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+              },
+              // Additional free TURN servers
+              { 
+                urls: 'turn:freeturn.tel:3478',
+                username: 'freeturn',
+                credential: 'freeturn'
+              },
+              { 
+                urls: 'turn:freeturn.tel:3478?transport=tcp',
+                username: 'freeturn',
+                credential: 'freeturn'
+              }
             ]
           }
         })
@@ -144,7 +215,20 @@ export default function VoiceChat() {
             setStatus('Peer disconnected')
             setRemoteStream(null)
           })
-          call.on('error', () => setStatus('Call error'))
+          call.on('error', (err: any) => {
+            console.error('Call error:', err)
+            setStatus('Call error: ' + err.message)
+          })
+          
+          // Monitor connection state
+          call.peerConnection.oniceconnectionstatechange = () => {
+            console.log('ICE connection state:', call.peerConnection.iceConnectionState)
+            if (call.peerConnection.iceConnectionState === 'failed') {
+              setStatus('Connection failed - trying TURN servers...')
+            } else if (call.peerConnection.iceConnectionState === 'connected') {
+              setStatus('Connected!')
+            }
+          }
         })
 
         guestPeer.on('error', (err: any) => {
@@ -285,6 +369,12 @@ export default function VoiceChat() {
         <p>3. Share the same room ID with your friend</p>
         <p>4. Your friend joins the same room ID from their device</p>
         <p>5. You'll be connected directly via P2P!</p>
+        <br />
+        <p><strong>Troubleshooting:</strong></p>
+        <p>• If connection fails, try a different room ID</p>
+        <p>• Check browser console for detailed error messages</p>
+        <p>• Ensure both users have microphone access enabled</p>
+        <p>• Try refreshing the page if connection gets stuck</p>
       </div>
 
       {/* Hidden audio elements for playback */}

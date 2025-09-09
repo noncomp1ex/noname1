@@ -1,52 +1,54 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-// Simple in-memory signaling store (resets on each serverless function cold start)
-const rooms = new Map<string, { hostId: string; guests: string[] }>()
+// Update room structure to include display names
+const rooms = new Map<string, { host: { id: string, name: string }, guests: { id: string, name: string }[] }>()
 
 export async function POST(request: NextRequest) {
   try {
-    const { action, roomId, peerId } = await request.json()
+    const { action, roomId, peerId, displayName } = await request.json()
 
     switch (action) {
-      case 'join':
+      case 'join': {
+        const name = displayName || peerId
         if (!rooms.has(roomId)) {
           // First user becomes host
-          rooms.set(roomId, { hostId: peerId, guests: [] })
-          return NextResponse.json({ isHost: true, hostId: peerId })
+          rooms.set(roomId, { host: { id: peerId, name }, guests: [] })
+          return NextResponse.json({ isHost: true, hostId: peerId, displayName: name })
         } else {
           // Add as guest
           const room = rooms.get(roomId)!
-          room.guests.push(peerId)
-          return NextResponse.json({ 
-            isHost: false, 
-            hostId: room.hostId,
-            guests: room.guests 
+          room.guests.push({ id: peerId, name })
+          return NextResponse.json({
+            isHost: false,
+            hostId: room.host.id,
+            guests: room.guests,
+            hostName: room.host.name
           })
         }
-
-      case 'leave':
+      }
+      case 'leave': {
         if (rooms.has(roomId)) {
           const room = rooms.get(roomId)!
-          if (room.hostId === peerId) {
+          if (room.host.id === peerId) {
             // Host leaving, remove room
             rooms.delete(roomId)
           } else {
             // Guest leaving, remove from guests
-            room.guests = room.guests.filter(id => id !== peerId)
+            room.guests = room.guests.filter(g => g.id !== peerId)
           }
         }
         return NextResponse.json({ success: true })
-
-      case 'get-room':
+      }
+      case 'get-room': {
         const room = rooms.get(roomId)
         if (room) {
-          return NextResponse.json({ 
-            hostId: room.hostId, 
-            guests: room.guests 
+          return NextResponse.json({
+            host: room.host,
+            guests: room.guests
           })
         }
         return NextResponse.json({ error: 'Room not found' }, { status: 404 })
-
+      }
       default:
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
     }

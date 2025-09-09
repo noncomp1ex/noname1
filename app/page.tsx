@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Peer, { MediaConnection } from 'peerjs'
 import React from 'react'
 
@@ -15,10 +15,17 @@ export default function VoiceChat() {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null)
   const [isHost, setIsHost] = useState(false)
   const [eventLog, setEventLog] = useState<string[]>([])
-  const [peerList, setPeerList] = useState<string[]>([])
+  const [displayName, setDisplayName] = useState('')
+  const [peerList, setPeerList] = useState<Array<{id: string, name: string, role: string}>>([])
   const [hostId, setHostId] = useState<string>('')
   const [myPeerId, setMyPeerId] = useState<string>('')
   const [iceCandidates, setIceCandidates] = useState<any[]>([])
+  const [turnLoading, setTurnLoading] = useState(false)
+  const [turnDone, setTurnDone] = useState(false)
+  const [reconnectLoading, setReconnectLoading] = useState(false)
+  const [reconnectDone, setReconnectDone] = useState(false)
+  const [currentMode, setCurrentMode] = useState<'Default' | 'Alternative TURN' | 'TURN-Only'>('Default')
+  const [currentIceServers, setCurrentIceServers] = useState<any[]>([])
 
   const localAudioRef = useRef<HTMLAudioElement>(null)
   const remoteAudioRef = useRef<HTMLAudioElement>(null)
@@ -68,11 +75,13 @@ export default function VoiceChat() {
       const turnResponse = await fetch('/api/turn')
       const turnData = await turnResponse.json()
       
+      const nameToSend = displayName.trim() || `Anonymous${Math.floor(Math.random()*1000)}`
+
       // Check if room exists and join
       const response = await fetch('/api/signaling', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'join', roomId: roomId.trim(), peerId })
+        body: JSON.stringify({ action: 'join', roomId: roomId.trim(), peerId, displayName: nameToSend })
       })
       
       const roomData = await response.json()
@@ -201,6 +210,8 @@ export default function VoiceChat() {
             }
           }, 2000)
         })
+
+        updateIceServers(hostPeer.options.config.iceServers, 'Default')
 
       } else {
         // We are a guest
@@ -342,6 +353,8 @@ export default function VoiceChat() {
             }
           }, 3000)
         })
+
+        updateIceServers(guestPeer.options.config.iceServers, 'Default')
       }
     } catch (error) {
       console.error('Signaling error:', error)
@@ -389,6 +402,7 @@ export default function VoiceChat() {
         
         setIsInCall(true)
         setIsHost(true)
+        updateIceServers(fallbackPeer.options.config.iceServers, 'Default')
       } catch (fallbackError) {
         console.error('Fallback failed:', fallbackError)
         setStatus('Connection failed completely - try refreshing the page')
@@ -475,6 +489,14 @@ export default function VoiceChat() {
     ...log.slice(0, 49)
   ])
 
+  // Helper to update ICE server list and mode
+  const updateIceServers = (servers: any[], mode: 'Default' | 'Alternative TURN' | 'TURN-Only') => {
+    setCurrentIceServers(servers)
+    setCurrentMode(mode)
+    logEvent(`Switched to ${mode} mode. Using servers: ${servers.map(s => s.urls).join(', ')}`)
+    setStatus(`Mode: ${mode}`)
+  }
+
   // Poll peer list every 2s
   useEffect(() => {
     if (!roomId) return
@@ -488,24 +510,33 @@ export default function VoiceChat() {
         })
         if (res.ok) {
           const data = await res.json()
-          setHostId(data.hostId)
-          setPeerList([data.hostId, ...(data.guests || [])])
+          // Compose peer list with roles
+          const peers: Array<{id: string, name: string, role: string}> = []
+          if (data.host) peers.push({ id: data.host.id, name: data.host.name, role: 'Host' })
+          if (data.guests) {
+            for (const g of data.guests) {
+              peers.push({ id: g.id, name: g.name, role: g.id === myPeerId ? 'You' : 'Guest' })
+            }
+          }
+          setPeerList(peers)
         }
       } catch {}
       if (!cancelled) setTimeout(pollPeers, 2000)
     }
     pollPeers()
     return () => { cancelled = true }
-  }, [roomId])
+  }, [roomId, myPeerId])
 
   // Log peer list changes
-  const prevPeerList = useRef<string[]>([])
+  const prevPeerList = useRef<Array<{id: string, name: string, role: string}>>([])
   useEffect(() => {
     if (prevPeerList.current.length) {
-      const joined = peerList.filter(p => !prevPeerList.current.includes(p))
-      const left = prevPeerList.current.filter(p => !peerList.includes(p))
-      joined.forEach(p => logEvent(`Peer joined: ${p}`))
-      left.forEach(p => logEvent(`Peer left: ${p}`))
+      const prevIds = prevPeerList.current.map(p => p.id)
+      const currIds = peerList.map(p => p.id)
+      const joined = peerList.filter(p => !prevIds.includes(p.id))
+      const left = prevPeerList.current.filter(p => !currIds.includes(p.id))
+      joined.forEach(p => logEvent(`Peer joined: ${p.name}`))
+      left.forEach(p => logEvent(`Peer left: ${p.name}`))
     }
     prevPeerList.current = peerList
   }, [peerList])
@@ -525,6 +556,156 @@ export default function VoiceChat() {
   // Attach to peerConnection in call setup:
   // call.peerConnection.addEventListener('icecandidate', e => { if (e.candidate) addIceCandidate(e.candidate) })
 
+  // Auto-leave on unload
+  useEffect(() => {
+    const handler = () => {
+      if (roomId && myPeerId) {
+        navigator.sendBeacon(
+          '/api/signaling',
+          JSON.stringify({ action: 'leave', roomId: roomId.trim(), peerId: myPeerId })
+        )
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [roomId, myPeerId])
+
+  // Improved TURN button
+  const handleTurn = useCallback(async () => {
+    setTurnLoading(true)
+    setTurnDone(false)
+    setStatus('Trying alternative connection method...')
+    try {
+      const altTurnResponse = await fetch('/api/turn')
+      const altTurnData = await altTurnResponse.json()
+      if (currentCallRef.current) {
+        const pc = currentCallRef.current.peerConnection
+        const config = pc.getConfiguration()
+        config.iceServers = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          ...altTurnData.turnServers
+        ]
+        pc.setConfiguration(config)
+        pc.restartIce()
+        setStatus('Trying alternative TURN servers...')
+      }
+      setTurnDone(true)
+    } catch (error) {
+      setStatus('Alternative connection failed')
+    }
+    setTurnLoading(false)
+    setTimeout(() => setTurnDone(false), 2000)
+  }, [])
+
+  // Improved reconnect button
+  const handleReconnect = useCallback(() => {
+    setReconnectLoading(true)
+    setReconnectDone(false)
+    setStatus('Force reconnecting...')
+    if (peerRef.current) peerRef.current.destroy()
+    if (currentCallRef.current) currentCallRef.current.close()
+    setRemoteStream(null)
+    setIsInCall(false)
+    setIsHost(false)
+    setStatus('Disconnected - please join room again')
+    setTimeout(() => {
+      setReconnectLoading(false)
+      setReconnectDone(true)
+      setTimeout(() => setReconnectDone(false), 2000)
+    }, 1000)
+  }, [])
+
+  // Improved Alternative TURN button
+  const handleAltTurn = useCallback(async () => {
+    setTurnLoading(true)
+    setTurnDone(false)
+    setStatus('Switching to alternative TURN servers...')
+    try {
+      const altTurnResponse = await fetch('/api/turn')
+      const altTurnData = await altTurnResponse.json()
+      const servers = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        ...altTurnData.turnServers
+      ]
+      if (currentCallRef.current) {
+        const pc = currentCallRef.current.peerConnection
+        const config = pc.getConfiguration()
+        config.iceServers = servers
+        pc.setConfiguration(config)
+        pc.restartIce()
+        updateIceServers(servers, 'Alternative TURN')
+      }
+      setTurnDone(true)
+    } catch (error) {
+      setStatus('Alternative TURN failed')
+    }
+    setTurnLoading(false)
+    setTimeout(() => setTurnDone(false), 2000)
+  }, [])
+
+  // Improved TURN-Only button
+  const handleTurnOnly = useCallback(async () => {
+    setTurnLoading(true)
+    setTurnDone(false)
+    setStatus('Switching to TURN-Only mode...')
+    try {
+      const turnResponse = await fetch('/api/turn')
+      const turnData = await turnResponse.json()
+      const servers = [...turnData.turnServers]
+      if (currentCallRef.current) {
+        const pc = currentCallRef.current.peerConnection
+        const config = pc.getConfiguration()
+        config.iceServers = servers
+        config.iceTransportPolicy = 'relay'
+        pc.setConfiguration(config)
+        pc.restartIce()
+        updateIceServers(servers, 'TURN-Only')
+      }
+      setTurnDone(true)
+    } catch (error) {
+      setStatus('TURN-Only mode failed')
+    }
+    setTurnLoading(false)
+    setTimeout(() => setTurnDone(false), 2000)
+  }, [])
+
+  // Improved Restart ICE button
+  const handleRestartIce = useCallback(() => {
+    setReconnectLoading(true)
+    setReconnectDone(false)
+    setStatus('Restarting ICE gathering...')
+    if (currentCallRef.current) {
+      currentCallRef.current.peerConnection.restartIce()
+      logEvent('ICE gathering restarted')
+    }
+    setTimeout(() => {
+      setReconnectLoading(false)
+      setReconnectDone(true)
+      setTimeout(() => setReconnectDone(false), 2000)
+    }, 1000)
+  }, [])
+
+  // Improved Force Reconnect button
+  const handleForceReconnect = useCallback(() => {
+    setReconnectLoading(true)
+    setReconnectDone(false)
+    setStatus('Disconnecting and resetting...')
+    if (peerRef.current) peerRef.current.destroy()
+    if (currentCallRef.current) currentCallRef.current.close()
+    setRemoteStream(null)
+    setIsInCall(false)
+    setIsHost(false)
+    setStatus('Disconnected - please join room again')
+    logEvent('Disconnected and reset')
+    setTimeout(() => {
+      setReconnectLoading(false)
+      setReconnectDone(true)
+      setTimeout(() => setReconnectDone(false), 2000)
+    }, 1000)
+  }, [])
+
   return (
     <div className="container">
       <h1>🎤 P2P Voice Chat</h1>
@@ -535,14 +716,18 @@ export default function VoiceChat() {
         <div><b>Your Peer ID:</b> {myPeerId || '(not joined)'}</div>
         <div><b>Status:</b> {status}</div>
         <div><b>Role:</b> {isHost ? 'Host' : 'Guest'}</div>
-        <div><b>Peers in Room:</b> {peerList.length}</div>
-        <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-          {peerList.map(pid => (
-            <li key={pid} style={{ color: pid === myPeerId ? '#0f0' : pid === hostId ? '#0af' : '#fff' }}>
-              {pid} {pid === myPeerId ? '(You)' : pid === hostId ? '(Host)' : ''}
+        <div><b>Current Connection Mode:</b> {currentMode}</div>
+        <div><b>ICE Servers in Use:</b></div>
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', fontSize: '0.9em' }}>
+          {currentIceServers.map((s, i) => (
+            <li key={i} style={{ color: s.urls.includes('turn:') ? '#ffb347' : '#b3e6ff' }}>
+              {s.urls} {s.urls.includes('turn:') ? '(TURN)' : '(STUN)'}
             </li>
           ))}
         </ul>
+        <div style={{ fontSize: '0.8em', color: '#aaa', marginTop: 4 }}>
+          Note: If you refresh or close the tab without leaving, your old peer may remain in the list for a while.
+        </div>
         <div style={{ marginTop: 8 }}>
           <b>ICE Candidates:</b>
           <ul style={{ maxHeight: 80, overflow: 'auto', fontSize: '0.8em' }}>
@@ -572,6 +757,7 @@ export default function VoiceChat() {
               value={roomId}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRoomId(e.target.value)}
             />
+            <input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Your display name" style={{ marginBottom: 8, padding: 6, borderRadius: 4, border: '1px solid #888', width: 200 }} />
             <button onClick={joinRoom} disabled={!roomId.trim() || isInCall}>
               {isInCall ? 'In Room' : 'Join Room'}
             </button>
@@ -611,118 +797,38 @@ export default function VoiceChat() {
             Debug Connection
           </button>
           
-          <button onClick={() => {
-            if (currentCallRef.current) {
-              console.log('Restarting ICE gathering...')
-              currentCallRef.current.peerConnection.restartIce()
-              setStatus('Restarting connection...')
-            }
-          }}>
-            Restart Connection
-          </button>
-          
-          <button onClick={async () => {
-            setStatus('Trying alternative connection method...')
-            // Try with different TURN servers
-            try {
-              const altTurnResponse = await fetch('/api/turn')
-              const altTurnData = await altTurnResponse.json()
-              
-              if (currentCallRef.current) {
-                const pc = currentCallRef.current.peerConnection
-                const config = pc.getConfiguration()
-                config.iceServers = [
-                  { urls: 'stun:stun.l.google.com:19302' },
-                  { urls: 'stun:stun1.l.google.com:19302' },
-                  ...altTurnData.turnServers
-                ]
-                pc.setConfiguration(config)
-                pc.restartIce()
-                setStatus('Trying alternative TURN servers...')
-              }
-            } catch (error) {
-              console.error('Alternative connection failed:', error)
-              setStatus('Alternative connection failed')
-            }
-          }}>
-            Try Alternative TURN
-          </button>
-          
-          <button onClick={() => {
-            setStatus('Force reconnecting...')
-            // Destroy current connection and restart
-            if (peerRef.current) {
-              peerRef.current.destroy()
-            }
-            if (currentCallRef.current) {
-              currentCallRef.current.close()
-            }
-            setRemoteStream(null)
-            setIsInCall(false)
-            setIsHost(false)
-            setStatus('Disconnected - please join room again')
-          }}>
-            Force Reconnect
-          </button>
-          
-          <button onClick={async () => {
-            setStatus('Trying restrictive NAT bypass...')
-            // Try with only TURN servers (no STUN)
-            try {
-              const turnResponse = await fetch('/api/turn')
-              const turnData = await turnResponse.json()
-              
-              if (currentCallRef.current) {
-                const pc = currentCallRef.current.peerConnection
-                const config = pc.getConfiguration()
-                config.iceServers = [
-                  // Only TURN servers for restrictive NATs
-                  ...turnData.turnServers
-                ]
-                config.iceTransportPolicy = 'relay'
-                pc.setConfiguration(config)
-                pc.restartIce()
-                setStatus('Trying TURN-only connection...')
-              }
-            } catch (error) {
-              console.error('TURN-only connection failed:', error)
-              setStatus('TURN-only connection failed')
-            }
-          }}>
-            Try TURN-Only
-          </button>
+          {/* Removed manual ICE/TURN/Reconnect buttons */}
         </div>
       )}
 
       {/* Instructions */}
       <div style={{ marginTop: '2rem', fontSize: '0.9rem', opacity: 0.8 }}>
-        <p><strong>How to use:</strong></p>
-        <p>1. Click "Start Voice Chat" and allow microphone access</p>
-        <p>2. Enter a room ID (e.g., "room123") and click "Join Room"</p>
-        <p>3. Share the same room ID with your friend</p>
-        <p>4. Your friend joins the same room ID from their device</p>
-        <p>5. You'll be connected directly via P2P!</p>
-        <br />
-        <p><strong>Troubleshooting:</strong></p>
-        <p>• If connection fails, try a different room ID</p>
-        <p>• Check browser console for detailed error messages</p>
-        <p>• Ensure both users have microphone access enabled</p>
-        <p>• Try refreshing the page if connection gets stuck</p>
-        <p>• Use "Debug Connection" button to see connection state</p>
-        <p>• Use "Restart Connection" if connection gets stuck</p>
-        <p>• Use "Try Alternative TURN" for cross-city connections</p>
-        <p>• Use "Try TURN-Only" for restrictive ISP networks</p>
-        <p>• If TURN servers fail, the app will try STUN-only fallback</p>
-        <p>• For cross-city connections, TURN servers are essential</p>
-        <p>• For restrictive ISPs (like Vivacom), try TURN-only mode</p>
-        <p>• Try opening two tabs on the same device first to test locally</p>
-        <p>• If ICE connection state shows "failed", try alternative TURN servers</p>
-        <p>• Mobile networks often work better than home WiFi for P2P connections</p>
+        <b>Instructions:</b>
+        <ul style={{ fontSize: '0.95em' }}>
+          <li>Start voice chat and join a room with a unique ID.</li>
+          <li>Share the room ID with your friend to connect.</li>
+          <li>Use <b>Leave Room</b> to exit the call.</li>
+          <li>If the connection fails, try refreshing the page or joining a different room.</li>
+        </ul>
       </div>
 
       {/* Hidden audio elements for playback */}
       <audio ref={localAudioRef} autoPlay muted />
       <audio ref={remoteAudioRef} autoPlay />
+
+      {/* Peers in Room */}
+      <div style={{ margin: '1em 0', background: '#181c24', borderRadius: 8, padding: 12 }}>
+        <b>Peers in Room:</b>
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+          {peerList.map(p => (
+            <li key={p.id} style={{ margin: '0.5em 0', padding: 8, background: p.role==='You' ? '#2e7d32' : p.role==='Host' ? '#1976d2' : '#333', color: '#fff', borderRadius: 6 }}>
+              <span style={{ fontWeight: 700, fontSize: '1.1em' }}>{p.name}</span>
+              <span style={{ marginLeft: 8, fontSize: '0.95em', opacity: 0.8 }}>({p.role})</span>
+              <div style={{ fontSize: '0.8em', color: '#bbb', marginTop: 2 }}>ID: {p.id}</div>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   )
 }

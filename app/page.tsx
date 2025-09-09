@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Peer, { MediaConnection } from 'peerjs'
+import React from 'react'
 
 interface VoiceChatProps {}
 
@@ -13,6 +14,11 @@ export default function VoiceChat() {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null)
   const [isHost, setIsHost] = useState(false)
+  const [eventLog, setEventLog] = useState<string[]>([])
+  const [peerList, setPeerList] = useState<string[]>([])
+  const [hostId, setHostId] = useState<string>('')
+  const [myPeerId, setMyPeerId] = useState<string>('')
+  const [iceCandidates, setIceCandidates] = useState<any[]>([])
 
   const localAudioRef = useRef<HTMLAudioElement>(null)
   const remoteAudioRef = useRef<HTMLAudioElement>(null)
@@ -463,11 +469,93 @@ export default function VoiceChat() {
     setStatus('Voice chat stopped')
   }
 
+  // Helper to add to event log
+  const logEvent = (msg: string) => setEventLog(log => [
+    `[${new Date().toLocaleTimeString()}] ${msg}`,
+    ...log.slice(0, 49)
+  ])
+
+  // Poll peer list every 2s
+  useEffect(() => {
+    if (!roomId) return
+    let cancelled = false
+    async function pollPeers() {
+      try {
+        const res = await fetch('/api/signaling', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'get-room', roomId: roomId.trim() })
+        })
+        if (res.ok) {
+          const data = await res.json()
+          setHostId(data.hostId)
+          setPeerList([data.hostId, ...(data.guests || [])])
+        }
+      } catch {}
+      if (!cancelled) setTimeout(pollPeers, 2000)
+    }
+    pollPeers()
+    return () => { cancelled = true }
+  }, [roomId])
+
+  // Log peer list changes
+  const prevPeerList = useRef<string[]>([])
+  useEffect(() => {
+    if (prevPeerList.current.length) {
+      const joined = peerList.filter(p => !prevPeerList.current.includes(p))
+      const left = prevPeerList.current.filter(p => !peerList.includes(p))
+      joined.forEach(p => logEvent(`Peer joined: ${p}`))
+      left.forEach(p => logEvent(`Peer left: ${p}`))
+    }
+    prevPeerList.current = peerList
+  }, [peerList])
+
+  // Set myPeerId after joinRoom
+  useEffect(() => {
+    if (peerRef.current) {
+      setMyPeerId(peerRef.current.id)
+    }
+  }, [peerRef.current?.id])
+
+  // ICE candidate logging
+  const addIceCandidate = (candidate: RTCIceCandidate) => {
+    setIceCandidates(cands => [candidate, ...cands.slice(0, 19)])
+    logEvent(`ICE candidate: ${candidate.candidate}`)
+  }
+  // Attach to peerConnection in call setup:
+  // call.peerConnection.addEventListener('icecandidate', e => { if (e.candidate) addIceCandidate(e.candidate) })
+
   return (
     <div className="container">
       <h1>🎤 P2P Voice Chat</h1>
       
-      <div className="status">{status}</div>
+      {/* Status Panel */}
+      <div style={{ background: '#222', color: '#fff', padding: '1rem', borderRadius: 8, marginBottom: 16 }}>
+        <div><b>Room:</b> {roomId || '(none)'}</div>
+        <div><b>Your Peer ID:</b> {myPeerId || '(not joined)'}</div>
+        <div><b>Status:</b> {status}</div>
+        <div><b>Role:</b> {isHost ? 'Host' : 'Guest'}</div>
+        <div><b>Peers in Room:</b> {peerList.length}</div>
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+          {peerList.map(pid => (
+            <li key={pid} style={{ color: pid === myPeerId ? '#0f0' : pid === hostId ? '#0af' : '#fff' }}>
+              {pid} {pid === myPeerId ? '(You)' : pid === hostId ? '(Host)' : ''}
+            </li>
+          ))}
+        </ul>
+        <div style={{ marginTop: 8 }}>
+          <b>ICE Candidates:</b>
+          <ul style={{ maxHeight: 80, overflow: 'auto', fontSize: '0.8em' }}>
+            {iceCandidates.map((c, i) => <li key={i}>{c.candidate}</li>)}
+          </ul>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <b>Event Log:</b>
+          <ul style={{ maxHeight: 100, overflow: 'auto', fontSize: '0.8em' }}>
+            {eventLog.map((e, i) => <li key={i}>{e}</li>)}
+          </ul>
+        </div>
+      </div>
 
       {!localStream ? (
         <div className="controls">

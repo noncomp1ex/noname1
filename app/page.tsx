@@ -23,6 +23,10 @@ export default function VoiceChat() {
   const [currentMode, setCurrentMode] = useState<'Default' | 'TURN-Only'>('Default')
   const [currentIceServers, setCurrentIceServers] = useState<any[]>([])
   const [displayName, setDisplayName] = useState('')
+  const [connectionState, setConnectionState] = useState<string>('-')
+  const [iceState, setIceState] = useState<string>('-')
+  const [signalingState, setSignalingState] = useState<string>('-')
+  const [selectedPair, setSelectedPair] = useState<{ local?: string, remote?: string, protocol?: string, candidateType?: string }>({})
 
   const localAudioRef = useRef<HTMLAudioElement>(null)
   const remoteAudioRef = useRef<HTMLAudioElement>(null)
@@ -57,14 +61,32 @@ export default function VoiceChat() {
   }
 
   const buildIceServers = async (relayOnly = false) => {
-    const turnRes = await fetch('/api/turn')
-    const turnData = await turnRes.json()
-    const baseStun = [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' }
-    ]
-    const servers = relayOnly ? [...turnData.turnServers] : [...baseStun, ...turnData.turnServers]
+    // Prefer environment-provided TURN (stable) if set
+    const ENV_TURN_URL = process.env.NEXT_PUBLIC_TURN_URL
+    const ENV_TURN_USERNAME = process.env.NEXT_PUBLIC_TURN_USERNAME
+    const ENV_TURN_CREDENTIAL = process.env.NEXT_PUBLIC_TURN_CREDENTIAL
+
+    let servers: any[] = []
+    if (ENV_TURN_URL && ENV_TURN_USERNAME && ENV_TURN_CREDENTIAL) {
+      const turnEntry = { urls: ENV_TURN_URL, username: ENV_TURN_USERNAME, credential: ENV_TURN_CREDENTIAL }
+      const baseStun = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ]
+      servers = relayOnly ? [turnEntry] : [...baseStun, turnEntry]
+    } else {
+      // Fallback to free TURN list (less reliable)
+      const turnRes = await fetch('/api/turn')
+      const turnData = await turnRes.json()
+      const baseStun = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ]
+      servers = relayOnly ? [...turnData.turnServers] : [...baseStun, ...turnData.turnServers]
+    }
+
     setCurrentIceServers(servers)
     setCurrentMode(relayOnly ? 'TURN-Only' : 'Default')
     return servers
@@ -74,6 +96,12 @@ export default function VoiceChat() {
     teardownPc()
     const servers = await buildIceServers(relayOnly)
     const pc = new RTCPeerConnection({ iceServers: servers, iceCandidatePoolSize: 10, iceTransportPolicy: relayOnly ? 'relay' : 'all' })
+
+    // Basic state hooks
+    pc.onconnectionstatechange = () => setConnectionState(pc.connectionState)
+    pc.onsignalingstatechange = () => setSignalingState(pc.signalingState)
+    pc.oniceconnectionstatechange = () => setIceState(pc.iceConnectionState)
+
     pc.onicecandidate = async (e) => {
       if (e.candidate && roomId && targetPeerRef.current) {
         addIceCandidate(e.candidate)
@@ -296,6 +324,41 @@ export default function VoiceChat() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [roomId, myPeerId])
 
+  // Periodically read stats to find selected candidate pair
+  useEffect(() => {
+    let timer: NodeJS.Timeout | null = null
+    const poll = async () => {
+      try {
+        const pc = pcRef.current
+        if (!pc) return
+        const stats = await pc.getStats()
+        let pairs: any = {}
+        const candidates: Record<string, any> = {}
+        stats.forEach((report: any) => {
+          if (report.type === 'candidate-pair') {
+            pairs[report.id] = report
+          } else if (report.type === 'remote-candidate' || report.type === 'local-candidate') {
+            candidates[report.id] = report
+          }
+        })
+        // Find selected candidate pair
+        const selected = Object.values(pairs).find((p: any) => p && (p as any).selected)
+        if (selected) {
+          const local = candidates[(selected as any).localCandidateId]
+          const remote = candidates[(selected as any).remoteCandidateId]
+          setSelectedPair({
+            local: local ? `${local.ip || local.address}:${local.port}` : undefined,
+            remote: remote ? `${remote.ip || remote.address}:${remote.port}` : undefined,
+            protocol: (selected as any).protocol || local?.protocol,
+            candidateType: remote?.candidateType || local?.candidateType
+          })
+        }
+      } catch {}
+    }
+    timer = setInterval(poll, 1500)
+    return () => { if (timer) clearInterval(timer) }
+  }, [])
+
   return (
     <div className="container">
       <h1>🎤 P2P Voice Chat</h1>
@@ -307,7 +370,18 @@ export default function VoiceChat() {
           <div><b>Your ID:</b> {myPeerId || '(not joined)'}</div>
           <div><b>Role:</b> {isHost ? 'Host' : isInCall ? 'Guest' : '-'}</div>
           <div><b>Mode:</b> {currentMode}</div>
+          <div><b>Conn:</b> {connectionState}</div>
+          <div><b>ICE:</b> {iceState}</div>
+          <div><b>Signal:</b> {signalingState}</div>
         </div>
+        {selectedPair.remote && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>Selected Path</div>
+            <div style={{ fontSize: 12, opacity: 0.9 }}>
+              Local: {selectedPair.local} → Remote: {selectedPair.remote} ({selectedPair.protocol || 'udp'} / {selectedPair.candidateType || 'unknown'})
+            </div>
+          </div>
+        )}
         <div style={{ marginTop: 10 }}>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>ICE Servers</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>

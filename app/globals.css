@@ -154,35 +154,9 @@ input:focus {
   transition: all 0.3s ease;
 }
 
-.participant.talking {
-  background: rgba(0, 255, 0, 0.2);
-  border-color: rgba(0, 255, 0, 0.4);
-  box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
-}
-
 .participant-name {
   font-weight: 500;
   color: white;
-}
-
-.participant.talking .participant-name {
-  color: #00ff00;
-  font-weight: 600;
-}
-
-.talking-indicator {
-  font-size: 1.2rem;
-  opacity: 0.7;
-}
-
-.participant.talking .talking-indicator {
-  opacity: 1;
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
 }
 
 /* Video Container Styles */

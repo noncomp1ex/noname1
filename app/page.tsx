@@ -17,122 +17,14 @@ export default function VoiceChat() {
   const [displayName, setDisplayName] = useState('')
   const [myPeerId, setMyPeerId] = useState('')
   const [remoteVideoStreams, setRemoteVideoStreams] = useState<Map<string, MediaStream>>(new Map())
-  const [participants, setParticipants] = useState<Map<string, { name: string, isTalking: boolean }>>(new Map())
+  const [participants, setParticipants] = useState<Map<string, string>>(new Map())
 
   const localAudioRef = useRef<HTMLAudioElement>(null)
   const roomRef = useRef<Room | null>(null)
   const videoContainerRef = useRef<HTMLDivElement>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const analyserRef = useRef<AnalyserNode | null>(null)
-  const dataArrayRef = useRef<Uint8Array | null>(null)
-  const animationFrameRef = useRef<number | null>(null)
 
   const log = (m: string) => setStatus(m)
 
-  // Audio level detection for talking indicators
-  const setupAudioAnalysis = (stream: MediaStream) => {
-    if (audioContextRef.current) {
-      audioContextRef.current.close()
-    }
-    
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-    const analyser = audioContext.createAnalyser()
-    const source = audioContext.createMediaStreamSource(stream)
-    
-    analyser.fftSize = 256
-    analyser.smoothingTimeConstant = 0.8
-    source.connect(analyser)
-    
-    audioContextRef.current = audioContext
-    analyserRef.current = analyser
-    dataArrayRef.current = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount))
-    
-    const checkAudioLevel = () => {
-      if (!analyserRef.current || !dataArrayRef.current) return
-      
-      analyserRef.current.getByteFrequencyData(dataArrayRef.current as any)
-      const average = dataArrayRef.current.reduce((a, b) => a + b) / dataArrayRef.current.length
-      const isTalking = average > 20 // Threshold for detecting speech
-      
-      setParticipants(prev => {
-        const newMap = new Map(prev)
-        const current = newMap.get(myPeerId)
-        if (current) {
-          newMap.set(myPeerId, { ...current, isTalking })
-        }
-        return newMap
-      })
-      
-      animationFrameRef.current = requestAnimationFrame(checkAudioLevel)
-    }
-    
-    checkAudioLevel()
-  }
-
-  const stopAudioAnalysis = () => {
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current)
-      animationFrameRef.current = null
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close()
-      audioContextRef.current = null
-    }
-  }
-
-  const setupRemoteAudioAnalysis = (audioTrack: MediaStreamTrack, participantId: string) => {
-    try {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-      const analyser = audioContext.createAnalyser()
-      const source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]))
-      
-      analyser.fftSize = 256
-      analyser.smoothingTimeConstant = 0.8
-      source.connect(analyser)
-      
-      const dataArray = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount))
-      let animationId: number
-      
-      const checkRemoteAudioLevel = () => {
-        try {
-          if (audioTrack.readyState !== 'live') {
-            audioContext.close()
-            return
-          }
-          
-          analyser.getByteFrequencyData(dataArray as any)
-          const average = dataArray.reduce((a, b) => a + b) / dataArray.length
-          const isTalking = average > 20 // Same threshold as local audio
-          
-          setParticipants(prev => {
-            const newMap = new Map(prev)
-            const current = newMap.get(participantId)
-            if (current) {
-              newMap.set(participantId, { ...current, isTalking })
-            }
-            return newMap
-          })
-          
-          animationId = requestAnimationFrame(checkRemoteAudioLevel)
-        } catch (error) {
-          console.error('Error in remote audio analysis:', error)
-          audioContext.close()
-        }
-      }
-      
-      checkRemoteAudioLevel()
-      
-      // Store cleanup function
-      audioTrack.addEventListener('ended', () => {
-        if (animationId) {
-          cancelAnimationFrame(animationId)
-        }
-        audioContext.close()
-      })
-      } catch (error) {
-        console.error('Error setting up remote audio analysis:', error)
-      }
-    }
 
   useEffect(() => {
     if (localAudioRef.current && localStream) localAudioRef.current.srcObject = localStream
@@ -143,7 +35,6 @@ export default function VoiceChat() {
       setStatus('Requesting microphone access...')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
       setLocalStream(stream)
-      setupAudioAnalysis(stream)
       setStatus('Microphone access granted - Ready to join a room')
     } catch (error) {
       setStatus('Error: Could not access microphone')
@@ -165,7 +56,7 @@ export default function VoiceChat() {
     room.on(RoomEvent.ConnectionStateChanged, (s) => log(`Connection: ${s}`))
     room.on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
       log(`Participant joined: ${p.identity}`)
-      setParticipants(prev => new Map(prev.set(p.identity, { name: p.name || p.identity, isTalking: false })))
+      setParticipants(prev => new Map(prev.set(p.identity, p.name || p.identity)))
     })
     room.on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
       log(`Participant left: ${p.identity}`)
@@ -189,9 +80,6 @@ export default function VoiceChat() {
           el.autoplay = true
           el.srcObject = new MediaStream([track.mediaStreamTrack])
           el.play().catch(() => {})
-          
-          // Analyze remote audio for talking detection
-          setupRemoteAudioAnalysis(track.mediaStreamTrack, p.identity)
         }
       } else if (track.kind === 'video') {
         const videoStream = new MediaStream([track.mediaStreamTrack])
@@ -206,27 +94,17 @@ export default function VoiceChat() {
           newMap.delete(p.identity)
           return newMap
         })
-      } else if (track.kind === 'audio') {
-        // Reset talking status when audio track is unsubscribed
-        setParticipants(prev => {
-          const newMap = new Map(prev)
-          const current = newMap.get(p.identity)
-          if (current) {
-            newMap.set(p.identity, { ...current, isTalking: false })
-          }
-          return newMap
-        })
       }
     })
 
     await room.connect(url, token)
 
     // Add local participant
-    setParticipants(prev => new Map(prev.set(myPeerId, { name: displayName || myPeerId, isTalking: false })))
+    setParticipants(prev => new Map(prev.set(myPeerId, displayName || myPeerId)))
 
     // Add existing remote participants
     room.remoteParticipants.forEach((participant) => {
-      setParticipants(prev => new Map(prev.set(participant.identity, { name: participant.name || participant.identity, isTalking: false })))
+      setParticipants(prev => new Map(prev.set(participant.identity, participant.name || participant.identity)))
     })
 
     // Publish microphone
@@ -241,7 +119,6 @@ export default function VoiceChat() {
     if (isSharing) {
       stopScreenShare()
     }
-    stopAudioAnalysis()
     roomRef.current?.disconnect()
     roomRef.current = null
     setIsInCall(false)
@@ -260,7 +137,6 @@ export default function VoiceChat() {
     if (roomRef.current) {
       roomRef.current.localParticipant.getTrackPublications().forEach(pub => pub.track?.stop())
     }
-    stopAudioAnalysis()
     setLocalStream(null)
     setScreenStream(null)
     setIsInCall(false)
@@ -367,17 +243,11 @@ export default function VoiceChat() {
         <div className="participants-container">
           <h3>Participants</h3>
           <div className="participants-list">
-            {Array.from(participants.entries()).map(([participantId, participant]) => (
-              <div 
-                key={participantId} 
-                className={`participant ${participant.isTalking ? 'talking' : ''}`}
-              >
+            {Array.from(participants.entries()).map(([participantId, participantName]) => (
+              <div key={participantId} className="participant">
                 <div className="participant-name">
-                  {participant.name}
+                  {participantName}
                   {participantId === myPeerId && ' (You)'}
-                </div>
-                <div className="talking-indicator">
-                  {participant.isTalking ? '🎤' : '🔇'}
                 </div>
               </div>
             ))}

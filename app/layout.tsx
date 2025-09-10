@@ -5,8 +5,8 @@ import { Inter } from 'next/font/google'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'P2P Voice Chat',
-  description: 'Minimal peer-to-peer voice chat application',
+  title: 'noname1',
+  description: 'the unstable voice chat',
 }
 
 export default function RootLayout({

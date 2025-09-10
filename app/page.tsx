@@ -201,96 +201,159 @@ export default function VoiceChat() {
   }
 
   return (
-    <div className="container">
-      <h1>🎤 P2P Voice Chat (LiveKit)</h1>
-      <div className="status">{status}</div>
-
-      {!localStream ? (
-        <div className="controls">
-          <button onClick={startVoiceChat}>Start Voice Chat</button>
+    <div className="app-container">
+      <div className="sidebar">
+        <div className="logo">
+          <h1>noname1</h1>
+          <div className="logo-accent"></div>
         </div>
-      ) : (
-        <div className="controls" style={{ gap: 8 }}>
-          <div className="room-input" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <input type="text" placeholder="Enter room ID (e.g., 'room123')" value={roomId} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRoomId(e.target.value)} />
-            <input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Your display name" />
-            <button onClick={joinLiveKit} disabled={!roomId.trim() || isInCall}>{isInCall ? 'In Room' : 'Join Room'}</button>
-          </div>
+        
+        <div className="status-card">
+          <div className="status-indicator"></div>
+          <span className="status-text">{status}</span>
+        </div>
+      </div>
 
-          {isInCall && (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={toggleMute} className={isMuted ? 'muted' : ''}>{isMuted ? '🔇 Unmute' : '🎤 Mute'}</button>
-              <button 
-                onClick={isSharing ? stopScreenShare : startScreenShare} 
-                className={isSharing ? 'sharing' : ''}
-              >
-                {isSharing ? '🛑 Stop Share' : '📺 Share Screen'}
+      <div className="main-content">
+        <div className="controls-section">
+
+          {!localStream ? (
+            <div className="start-section">
+              <button className="start-btn" onClick={startVoiceChat}>
+                <span>Start Voice Chat</span>
+                <div className="btn-glow"></div>
               </button>
-              <button onClick={leaveLiveKit}>Leave Room</button>
+            </div>
+          ) : (
+            <div className="controls-grid">
+              <div className="room-section">
+                <div className="input-group">
+                  <input 
+                    type="text" 
+                    placeholder="Room ID" 
+                    value={roomId} 
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRoomId(e.target.value)} 
+                    className="room-input"
+                  />
+                  <input 
+                    value={displayName} 
+                    onChange={e => setDisplayName(e.target.value)} 
+                    placeholder="Your name" 
+                    className="name-input"
+                  />
+                  <button 
+                    onClick={joinLiveKit} 
+                    disabled={!roomId.trim() || isInCall}
+                    className={`join-btn ${isInCall ? 'active' : ''}`}
+                  >
+                    {isInCall ? 'In Room' : 'Join'}
+                    <div className="btn-particles"></div>
+                  </button>
+                </div>
+              </div>
+
+              {isInCall && (
+                <div className="action-buttons">
+                  <button 
+                    onClick={toggleMute} 
+                    className={`action-btn mute-btn ${isMuted ? 'muted' : ''}`}
+                  >
+                    <span>{isMuted ? '🔇' : '🎤'}</span>
+                    <div className="btn-ripple"></div>
+                  </button>
+                  <button 
+                    onClick={isSharing ? stopScreenShare : startScreenShare} 
+                    className={`action-btn share-btn ${isSharing ? 'sharing' : ''}`}
+                  >
+                    <span>{isSharing ? '🛑' : '📺'}</span>
+                    <div className="btn-ripple"></div>
+                  </button>
+                  <button 
+                    onClick={leaveLiveKit}
+                    className="action-btn leave-btn"
+                  >
+                    <span>🚪 Exit</span>
+                    <div className="btn-ripple"></div>
+                  </button>
+                </div>
+              )}
+
+              <div className="stop-section">
+                <button 
+                  onClick={stopVoiceChat}
+                  className="stop-btn"
+                >
+                  Stop Voice Chat
+                  <div className="btn-glow"></div>
+                </button>
+              </div>
             </div>
           )}
-
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={stopVoiceChat}>Stop Voice Chat</button>
-          </div>
         </div>
-      )}
 
       <audio ref={localAudioRef} autoPlay muted />
       
-      {/* Participants List */}
-      {isInCall && participants.size > 0 && (
-        <div className="participants-container">
-          <h3>Participants</h3>
-          <div className="participants-list">
-            {Array.from(participants.entries()).map(([participantId, participantName]) => (
-              <div key={participantId} className="participant">
-                <div className="participant-name">
-                  {participantName}
-                  {participantId === myPeerId && ' (You)'}
+        {/* Participants List */}
+        {isInCall && participants.size > 0 && (
+          <div className="participants-section">
+            <h3 className="section-title">Participants</h3>
+            <div className="participants-grid">
+              {Array.from(participants.entries()).map(([participantId, participantName]) => (
+                <div key={participantId} className="participant-card">
+                  <div className="participant-avatar">
+                    {participantName.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="participant-info">
+                    <span className="participant-name">{participantName}</span>
+                    {participantId === myPeerId && <span className="you-badge">You</span>}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
-      )}
-      
-      {/* Video Display Section */}
-      {(isSharing || remoteVideoStreams.size > 0) && (
-        <div className="video-container" ref={videoContainerRef}>
-          <h3>Screen Shares</h3>
-          <div className="video-grid">
-            {/* Local screen share */}
-            {isSharing && screenStream && (
-              <div className="video-item">
-                <video 
-                  autoPlay 
-                  muted 
-                  playsInline
-                  ref={(el) => {
-                    if (el && screenStream) el.srcObject = screenStream
-                  }}
-                />
-                <div className="video-label">Your Screen</div>
-              </div>
-            )}
-            
-            {/* Remote screen shares */}
-            {Array.from(remoteVideoStreams.entries()).map(([participantId, stream]) => (
-              <div key={participantId} className="video-item">
-                <video 
-                  autoPlay 
-                  playsInline
-                  ref={(el) => {
-                    if (el && stream) el.srcObject = stream
-                  }}
-                />
-                <div className="video-label">{participantId}</div>
-              </div>
-            ))}
+        )}
+        
+        {/* Video Display Section */}
+        {(isSharing || remoteVideoStreams.size > 0) && (
+          <div className="video-section" ref={videoContainerRef}>
+            <h3 className="section-title">Screen Shares</h3>
+            <div className="video-grid">
+              {/* Local screen share */}
+              {isSharing && screenStream && (
+                <div className="video-card">
+                  <video 
+                    autoPlay 
+                    muted 
+                    playsInline
+                    ref={(el) => {
+                      if (el && screenStream) el.srcObject = screenStream
+                    }}
+                  />
+                  <div className="video-overlay">
+                    <span className="video-label">Your Screen</span>
+                  </div>
+                </div>
+              )}
+              
+              {/* Remote screen shares */}
+              {Array.from(remoteVideoStreams.entries()).map(([participantId, stream]) => (
+                <div key={participantId} className="video-card">
+                  <video 
+                    autoPlay 
+                    playsInline
+                    ref={(el) => {
+                      if (el && stream) el.srcObject = stream
+                    }}
+                  />
+                  <div className="video-overlay">
+                    <span className="video-label">{participantId}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }

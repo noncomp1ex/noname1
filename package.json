@@ -9,6 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "livekit-client": "^2.15.6",
+    "livekit-server-sdk": "^2.13.3",
     "next": "^14.2.32",
     "peerjs": "^1.5.5",
     "react": "^18",

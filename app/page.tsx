@@ -275,11 +275,7 @@ export default function VoiceChat() {
     try {
       setStatus('Requesting screen share access...')
       const stream = await navigator.mediaDevices.getDisplayMedia({ 
-        video: {
-          width: { ideal: 800, max: 1280 },
-          height: { ideal: 600, max: 720 },
-          frameRate: { ideal: 10, max: 15 }
-        },
+        video: true,
         audio: false 
       })
       
@@ -401,12 +397,8 @@ export default function VoiceChat() {
                   autoPlay 
                   muted 
                   playsInline
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   ref={(el) => {
-                    if (el && screenStream) {
-                      el.srcObject = screenStream
-                      el.play().catch(console.error)
-                    }
+                    if (el && screenStream) el.srcObject = screenStream
                   }}
                 />
                 <div className="video-label">Your Screen</div>
@@ -419,12 +411,8 @@ export default function VoiceChat() {
                 <video 
                   autoPlay 
                   playsInline
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   ref={(el) => {
-                    if (el && stream) {
-                      el.srcObject = stream
-                      el.play().catch(console.error)
-                    }
+                    if (el && stream) el.srcObject = stream
                   }}
                 />
                 <div className="video-label">{participantId}</div>

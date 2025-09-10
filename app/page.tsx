@@ -276,9 +276,9 @@ export default function VoiceChat() {
       setStatus('Requesting screen share access...')
       const stream = await navigator.mediaDevices.getDisplayMedia({ 
         video: {
-          width: { ideal: 1280, max: 1920 },
-          height: { ideal: 720, max: 1080 },
-          frameRate: { ideal: 30, max: 60 }
+          width: { ideal: 800, max: 1280 },
+          height: { ideal: 600, max: 720 },
+          frameRate: { ideal: 10, max: 15 }
         },
         audio: false 
       })

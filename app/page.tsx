@@ -45,12 +45,12 @@ export default function VoiceChat() {
     
     audioContextRef.current = audioContext
     analyserRef.current = analyser
-    dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount)
+    dataArrayRef.current = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount))
     
     const checkAudioLevel = () => {
       if (!analyserRef.current || !dataArrayRef.current) return
       
-      analyserRef.current.getByteFrequencyData(dataArrayRef.current)
+      analyserRef.current.getByteFrequencyData(dataArrayRef.current as any)
       const average = dataArrayRef.current.reduce((a, b) => a + b) / dataArrayRef.current.length
       const isTalking = average > 20 // Threshold for detecting speech
       
@@ -89,10 +89,10 @@ export default function VoiceChat() {
     analyser.smoothingTimeConstant = 0.8
     source.connect(analyser)
     
-    const dataArray = new Uint8Array(analyser.frequencyBinCount)
+    const dataArray = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount))
     
     const checkRemoteAudioLevel = () => {
-      analyser.getByteFrequencyData(dataArray)
+      analyser.getByteFrequencyData(dataArray as any)
       const average = dataArray.reduce((a, b) => a + b) / dataArray.length
       const isTalking = average > 20 // Same threshold as local audio
       

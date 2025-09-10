@@ -129,10 +129,10 @@ export default function VoiceChat() {
         }
         audioContext.close()
       })
-    } catch (error) {
-      console.error('Error setting up remote audio analysis:', error)
+      } catch (error) {
+        console.error('Error setting up remote audio analysis:', error)
+      }
     }
-  }
 
   useEffect(() => {
     if (localAudioRef.current && localStream) localAudioRef.current.srcObject = localStream
@@ -275,13 +275,17 @@ export default function VoiceChat() {
     try {
       setStatus('Requesting screen share access...')
       const stream = await navigator.mediaDevices.getDisplayMedia({ 
-        video: true,
+        video: {
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          frameRate: { ideal: 30, max: 60 }
+        },
         audio: false 
       })
       
       setScreenStream(stream)
       
-      // Publish video track directly
+      // Publish video track directly with quality constraints
       await roomRef.current.localParticipant.publishTrack(stream.getVideoTracks()[0])
       
       setIsSharing(true)
@@ -397,8 +401,12 @@ export default function VoiceChat() {
                   autoPlay 
                   muted 
                   playsInline
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   ref={(el) => {
-                    if (el && screenStream) el.srcObject = screenStream
+                    if (el && screenStream) {
+                      el.srcObject = screenStream
+                      el.play().catch(console.error)
+                    }
                   }}
                 />
                 <div className="video-label">Your Screen</div>
@@ -411,8 +419,12 @@ export default function VoiceChat() {
                 <video 
                   autoPlay 
                   playsInline
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   ref={(el) => {
-                    if (el && stream) el.srcObject = stream
+                    if (el && stream) {
+                      el.srcObject = stream
+                      el.play().catch(console.error)
+                    }
                   }}
                 />
                 <div className="video-label">{participantId}</div>

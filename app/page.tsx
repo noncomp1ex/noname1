@@ -17,12 +17,103 @@ export default function VoiceChat() {
   const [displayName, setDisplayName] = useState('')
   const [myPeerId, setMyPeerId] = useState('')
   const [remoteVideoStreams, setRemoteVideoStreams] = useState<Map<string, MediaStream>>(new Map())
+  const [participants, setParticipants] = useState<Map<string, { name: string, isTalking: boolean }>>(new Map())
 
   const localAudioRef = useRef<HTMLAudioElement>(null)
   const roomRef = useRef<Room | null>(null)
   const videoContainerRef = useRef<HTMLDivElement>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const dataArrayRef = useRef<Uint8Array | null>(null)
+  const animationFrameRef = useRef<number | null>(null)
 
   const log = (m: string) => setStatus(m)
+
+  // Audio level detection for talking indicators
+  const setupAudioAnalysis = (stream: MediaStream) => {
+    if (audioContextRef.current) {
+      audioContextRef.current.close()
+    }
+    
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+    const analyser = audioContext.createAnalyser()
+    const source = audioContext.createMediaStreamSource(stream)
+    
+    analyser.fftSize = 256
+    analyser.smoothingTimeConstant = 0.8
+    source.connect(analyser)
+    
+    audioContextRef.current = audioContext
+    analyserRef.current = analyser
+    dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount)
+    
+    const checkAudioLevel = () => {
+      if (!analyserRef.current || !dataArrayRef.current) return
+      
+      analyserRef.current.getByteFrequencyData(dataArrayRef.current)
+      const average = dataArrayRef.current.reduce((a, b) => a + b) / dataArrayRef.current.length
+      const isTalking = average > 20 // Threshold for detecting speech
+      
+      setParticipants(prev => {
+        const newMap = new Map(prev)
+        const current = newMap.get(myPeerId)
+        if (current) {
+          newMap.set(myPeerId, { ...current, isTalking })
+        }
+        return newMap
+      })
+      
+      animationFrameRef.current = requestAnimationFrame(checkAudioLevel)
+    }
+    
+    checkAudioLevel()
+  }
+
+  const stopAudioAnalysis = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current)
+      animationFrameRef.current = null
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close()
+      audioContextRef.current = null
+    }
+  }
+
+  const setupRemoteAudioAnalysis = (audioTrack: MediaStreamTrack, participantId: string) => {
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+    const analyser = audioContext.createAnalyser()
+    const source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]))
+    
+    analyser.fftSize = 256
+    analyser.smoothingTimeConstant = 0.8
+    source.connect(analyser)
+    
+    const dataArray = new Uint8Array(analyser.frequencyBinCount)
+    
+    const checkRemoteAudioLevel = () => {
+      analyser.getByteFrequencyData(dataArray)
+      const average = dataArray.reduce((a, b) => a + b) / dataArray.length
+      const isTalking = average > 20 // Same threshold as local audio
+      
+      setParticipants(prev => {
+        const newMap = new Map(prev)
+        const current = newMap.get(participantId)
+        if (current) {
+          newMap.set(participantId, { ...current, isTalking })
+        }
+        return newMap
+      })
+      
+      if (audioTrack.readyState === 'live') {
+        requestAnimationFrame(checkRemoteAudioLevel)
+      } else {
+        audioContext.close()
+      }
+    }
+    
+    checkRemoteAudioLevel()
+  }
 
   useEffect(() => {
     if (localAudioRef.current && localStream) localAudioRef.current.srcObject = localStream
@@ -33,6 +124,7 @@ export default function VoiceChat() {
       setStatus('Requesting microphone access...')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
       setLocalStream(stream)
+      setupAudioAnalysis(stream)
       setStatus('Microphone access granted - Ready to join a room')
     } catch (error) {
       setStatus('Error: Could not access microphone')
@@ -52,14 +144,27 @@ export default function VoiceChat() {
     roomRef.current = room
 
     room.on(RoomEvent.ConnectionStateChanged, (s) => log(`Connection: ${s}`))
-    room.on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => log(`Participant joined: ${p.identity}`))
-    room.on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => log(`Participant left: ${p.identity}`))
+    room.on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
+      log(`Participant joined: ${p.identity}`)
+      setParticipants(prev => new Map(prev.set(p.identity, { name: p.name || p.identity, isTalking: false })))
+    })
+    room.on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
+      log(`Participant left: ${p.identity}`)
+      setParticipants(prev => {
+        const newMap = new Map(prev)
+        newMap.delete(p.identity)
+        return newMap
+      })
+    })
     room.on(RoomEvent.TrackSubscribed, (track, pub, p) => {
       if (track.kind === 'audio') {
         const el = new Audio()
         el.autoplay = true
         el.srcObject = new MediaStream([track.mediaStreamTrack])
         el.play().catch(() => {})
+        
+        // Analyze remote audio for talking detection
+        setupRemoteAudioAnalysis(track.mediaStreamTrack, p.identity)
       } else if (track.kind === 'video') {
         const videoStream = new MediaStream([track.mediaStreamTrack])
         setRemoteVideoStreams(prev => new Map(prev.set(p.identity, videoStream)))
@@ -78,6 +183,9 @@ export default function VoiceChat() {
 
     await room.connect(url, token)
 
+    // Add local participant
+    setParticipants(prev => new Map(prev.set(myPeerId, { name: displayName || myPeerId, isTalking: false })))
+
     // Publish microphone
     const localAudio = await createLocalAudioTrack({ echoCancellation: true, noiseSuppression: true, autoGainControl: true })
     await room.localParticipant.publishTrack(localAudio)
@@ -90,9 +198,11 @@ export default function VoiceChat() {
     if (isSharing) {
       stopScreenShare()
     }
+    stopAudioAnalysis()
     roomRef.current?.disconnect()
     roomRef.current = null
     setIsInCall(false)
+    setParticipants(new Map())
     setStatus('Left the room')
   }
 
@@ -107,10 +217,12 @@ export default function VoiceChat() {
     if (roomRef.current) {
       roomRef.current.localParticipant.getTrackPublications().forEach(pub => pub.track?.stop())
     }
+    stopAudioAnalysis()
     setLocalStream(null)
     setScreenStream(null)
     setIsInCall(false)
     setIsSharing(false)
+    setParticipants(new Map())
     setStatus('Voice chat stopped')
   }
 
@@ -206,6 +318,29 @@ export default function VoiceChat() {
       )}
 
       <audio ref={localAudioRef} autoPlay muted />
+      
+      {/* Participants List */}
+      {isInCall && participants.size > 0 && (
+        <div className="participants-container">
+          <h3>Participants</h3>
+          <div className="participants-list">
+            {Array.from(participants.entries()).map(([participantId, participant]) => (
+              <div 
+                key={participantId} 
+                className={`participant ${participant.isTalking ? 'talking' : ''}`}
+              >
+                <div className="participant-name">
+                  {participant.name}
+                  {participantId === myPeerId && ' (You)'}
+                </div>
+                <div className="talking-indicator">
+                  {participant.isTalking ? '🎤' : '🔇'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       
       {/* Video Display Section */}
       {(isSharing || remoteVideoStreams.size > 0) && (

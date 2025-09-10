@@ -81,38 +81,57 @@ export default function VoiceChat() {
   }
 
   const setupRemoteAudioAnalysis = (audioTrack: MediaStreamTrack, participantId: string) => {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-    const analyser = audioContext.createAnalyser()
-    const source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]))
-    
-    analyser.fftSize = 256
-    analyser.smoothingTimeConstant = 0.8
-    source.connect(analyser)
-    
-    const dataArray = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount))
-    
-    const checkRemoteAudioLevel = () => {
-      analyser.getByteFrequencyData(dataArray as any)
-      const average = dataArray.reduce((a, b) => a + b) / dataArray.length
-      const isTalking = average > 20 // Same threshold as local audio
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      const analyser = audioContext.createAnalyser()
+      const source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]))
       
-      setParticipants(prev => {
-        const newMap = new Map(prev)
-        const current = newMap.get(participantId)
-        if (current) {
-          newMap.set(participantId, { ...current, isTalking })
+      analyser.fftSize = 256
+      analyser.smoothingTimeConstant = 0.8
+      source.connect(analyser)
+      
+      const dataArray = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount))
+      let animationId: number
+      
+      const checkRemoteAudioLevel = () => {
+        try {
+          if (audioTrack.readyState !== 'live') {
+            audioContext.close()
+            return
+          }
+          
+          analyser.getByteFrequencyData(dataArray as any)
+          const average = dataArray.reduce((a, b) => a + b) / dataArray.length
+          const isTalking = average > 20 // Same threshold as local audio
+          
+          setParticipants(prev => {
+            const newMap = new Map(prev)
+            const current = newMap.get(participantId)
+            if (current) {
+              newMap.set(participantId, { ...current, isTalking })
+            }
+            return newMap
+          })
+          
+          animationId = requestAnimationFrame(checkRemoteAudioLevel)
+        } catch (error) {
+          console.error('Error in remote audio analysis:', error)
+          audioContext.close()
         }
-        return newMap
-      })
-      
-      if (audioTrack.readyState === 'live') {
-        requestAnimationFrame(checkRemoteAudioLevel)
-      } else {
-        audioContext.close()
       }
+      
+      checkRemoteAudioLevel()
+      
+      // Store cleanup function
+      audioTrack.addEventListener('ended', () => {
+        if (animationId) {
+          cancelAnimationFrame(animationId)
+        }
+        audioContext.close()
+      })
+    } catch (error) {
+      console.error('Error setting up remote audio analysis:', error)
     }
-    
-    checkRemoteAudioLevel()
   }
 
   useEffect(() => {
@@ -155,16 +174,25 @@ export default function VoiceChat() {
         newMap.delete(p.identity)
         return newMap
       })
+      // Clean up remote video streams
+      setRemoteVideoStreams(prev => {
+        const newMap = new Map(prev)
+        newMap.delete(p.identity)
+        return newMap
+      })
     })
     room.on(RoomEvent.TrackSubscribed, (track, pub, p) => {
       if (track.kind === 'audio') {
-        const el = new Audio()
-        el.autoplay = true
-        el.srcObject = new MediaStream([track.mediaStreamTrack])
-        el.play().catch(() => {})
-        
-        // Analyze remote audio for talking detection
-        setupRemoteAudioAnalysis(track.mediaStreamTrack, p.identity)
+        // Only play audio from remote participants, not our own
+        if (p.identity !== myPeerId) {
+          const el = new Audio()
+          el.autoplay = true
+          el.srcObject = new MediaStream([track.mediaStreamTrack])
+          el.play().catch(() => {})
+          
+          // Analyze remote audio for talking detection
+          setupRemoteAudioAnalysis(track.mediaStreamTrack, p.identity)
+        }
       } else if (track.kind === 'video') {
         const videoStream = new MediaStream([track.mediaStreamTrack])
         setRemoteVideoStreams(prev => new Map(prev.set(p.identity, videoStream)))
@@ -178,6 +206,16 @@ export default function VoiceChat() {
           newMap.delete(p.identity)
           return newMap
         })
+      } else if (track.kind === 'audio') {
+        // Reset talking status when audio track is unsubscribed
+        setParticipants(prev => {
+          const newMap = new Map(prev)
+          const current = newMap.get(p.identity)
+          if (current) {
+            newMap.set(p.identity, { ...current, isTalking: false })
+          }
+          return newMap
+        })
       }
     })
 
@@ -185,6 +223,11 @@ export default function VoiceChat() {
 
     // Add local participant
     setParticipants(prev => new Map(prev.set(myPeerId, { name: displayName || myPeerId, isTalking: false })))
+
+    // Add existing remote participants
+    room.remoteParticipants.forEach((participant) => {
+      setParticipants(prev => new Map(prev.set(participant.identity, { name: participant.name || participant.identity, isTalking: false })))
+    })
 
     // Publish microphone
     const localAudio = await createLocalAudioTrack({ echoCancellation: true, noiseSuppression: true, autoGainControl: true })
